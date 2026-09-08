@@ -2,8 +2,13 @@
 
 Find out what any texture or model in ROSE Online is called.
 
-Download the files, put them in a folder together, and double-click
-`ROSE Asset Hunter.pyw`.
+### [⬇ Download ROSE Asset Hunter](https://github.com/OlarisMods/ROSE-Asset-Hunter/releases/latest/download/ROSE_Asset_Hunter.zip)
+
+Unzip it anywhere and double-click `ROSE Asset Hunter.pyw`. Keep the files
+together in their folder.
+
+*(That link always gives you the newest version. You do not need a GitHub
+account, and there is nothing to sign up for.)*
 
 ---
 
