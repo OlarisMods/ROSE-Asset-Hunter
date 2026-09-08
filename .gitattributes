@@ -1,0 +1,15 @@
+# Line endings are pinned here so they are not guessed per machine.
+#
+# Without this, Git for Windows decides for itself on every clone. It reports
+# files as changed that nobody opened, and it can normalise a real edit away so
+# a file you DID change vanishes from the list. Stating it once ends the guessing.
+
+* text=auto
+
+*.py   text eol=lf
+*.pyw  text eol=lf
+*.md   text eol=lf
+
+# The read-me files are opened in Notepad by Windows users, so they keep
+# Windows line endings.
+*.txt  text eol=crlf

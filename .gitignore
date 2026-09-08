@@ -1,0 +1,3 @@
+# Python leaves these behind when the app runs. Not part of the tool.
+__pycache__/
+*.pyc

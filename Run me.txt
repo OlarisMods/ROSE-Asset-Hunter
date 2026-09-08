@@ -1,0 +1,5 @@
+Double-click  "ROSE Asset Hunter.pyw"
+
+The .pyw ending is what stops Windows opening a black console window
+behind the app. If your machine does not know what to do with .pyw,
+right-click it once, choose Open with, and pick Python.

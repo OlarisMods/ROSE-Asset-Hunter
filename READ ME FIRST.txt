@@ -1,0 +1,208 @@
+====================================================================
+  GIT DESK
+====================================================================
+
+See what changed, save it, send it to GitHub. Any folder, any project.
+
+  Double-click "Git Desk.pyw".  Nothing to install.
+
+  The .pyw ending is deliberate -- it stops Windows opening a
+  black console window behind the app.
+
+
+--------------------------------------------------------------------
+WHAT IT IS FOR
+--------------------------------------------------------------------
+Git is two different tools wearing one name: a history tool that runs
+on your machine, and a protocol for a team to collaborate. Its
+vocabulary -- index, HEAD, refspec, origin, upstream -- was written
+for the second one.
+
+Almost none of that is load-bearing for saving work and sending it
+somewhere. So this hides the vocabulary and keeps the commands
+visible. Every button prints the command before it runs it and the
+answer afterwards.
+
+You are not meant to memorise them. You are meant to be able to see
+them, and to stop needing to.
+
+
+--------------------------------------------------------------------
+THE FOUR IDEAS YOU ACTUALLY NEED
+--------------------------------------------------------------------
+1. A SAVE is a labelled point in your work. It is on your machine
+   only. Nothing about it has reached GitHub.
+
+2. SEND is a separate act. It is what puts your saves on GitHub.
+   That is why they are two buttons and not one.
+
+3. GITHUB CAN BE AHEAD OF YOU. If you changed something on the
+   website, or from another machine, your copy is behind and it has
+   to catch up before it can send.
+
+4. YOUR ACCOUNT IS A SETTING ON THE MACHINE, not on the folder.
+
+That last one is the whole reason this exists, so it gets its own
+section.
+
+
+--------------------------------------------------------------------
+WHY THE ACCOUNT LINE IS THE MOST IMPORTANT THING HERE
+--------------------------------------------------------------------
+You have two GitHub accounts. Some folders belong to one, some to the
+other. But git does not know that: the ACTIVE ACCOUNT is one setting
+for the whole machine, and the FOLDER you are standing in is a
+separate thing entirely. Nothing connects them.
+
+So you are expected to remember, every single time, which account
+goes with which folder -- and if you get it wrong you find out from a
+failed push that looks like a permissions problem and is not.
+
+Git Desk works it out instead. Every clone knows the address it came
+from, and that address contains the owner:
+
+    github.com/OlarisMods/Kyio-s-Rose-Mods    needs OlarisMods
+    github.com/moonraven3085/OlarisLabs       needs moonraven3085
+
+It reads that, compares it to whichever account is actually active,
+and says so on screen before anything is sent. When they do not
+match, the line turns red and grows a button that switches for you.
+
+It also checks AGAIN at the moment you press Send, because the
+account can be changed from a console without this window hearing
+about it, and a conclusion that was true five minutes ago is not
+evidence.
+
+
+--------------------------------------------------------------------
+THE FOUR BUTTONS
+--------------------------------------------------------------------
+WHAT CHANGED
+    Runs by itself when you open a folder, and after everything else.
+    Read-only -- it cannot do any harm, so there is no reason not to
+    press it.
+
+    Four lists, and the fourth is the one worth knowing about:
+
+      New       files that were not there before
+      Changed   files that were
+      Deleted   files that have gone
+      Skipped   files .gitignore is leaving out
+
+    SKIPPED IS THERE BECAUSE OF A REAL INCIDENT. A file matched by
+    .gitignore does not appear in git's own status in ANY form. Not
+    marked as excluded -- simply absent. That is how a .preview
+    folder went missing from a set of profiles, and how you find out
+    from the person you sent them to rather than from your screen.
+
+SAVE
+    Takes everything, with a message. Before it saves, it tells you
+    how much it is adding to the history, permanently.
+
+    That number matters for packs. Zips, textures and models do not
+    compress against each other, so every version of one is kept
+    whole and forever. Nothing that is saved is ever removed later.
+
+    It stops outright at 95 MB in a single file. GitHub refuses
+    anything over 100 MB, and it refuses it when you SEND -- long
+    after the save that was the actual problem. By then the file is
+    in the history and getting it out is genuinely hard.
+
+    WHAT THIS COSTS YOU: it always takes everything. You cannot save
+    half your changes. For one person working alone that is a good
+    trade, but it is a trade and you should know about it.
+
+SEND
+    Puts your saves on GitHub. Sets things up automatically the first
+    time a branch is sent.
+
+    It will not send if anything is genuinely in the way, and it
+    lists EVERY reason at once rather than the first one. That is
+    deliberate: three loot beam faults shipped because each was found
+    and fixed on its own, and each repair quietly undid the one
+    before it.
+
+PUBLISH A RELEASE
+    Not in this version. It is next, and it is the one that needs the
+    most care -- see the last section.
+
+
+--------------------------------------------------------------------
+WHEN GITHUB IS AHEAD OF YOU
+--------------------------------------------------------------------
+A line appears saying so, with a "Get them" button.
+
+That button only ever does the safe version: bring changes down when
+that is all it is, and REFUSE if both sides have changed. If both
+sides changed, that is a real decision about which version wins, and
+an app should not make it quietly by pressing a button. It stops,
+touches nothing, and says so.
+
+
+--------------------------------------------------------------------
+WHAT IS DELIBERATELY MISSING
+--------------------------------------------------------------------
+NO UNDO. There is no button to un-send, un-save or rewrite history,
+and there is not going to be. Rewriting published history is the one
+git operation that can genuinely lose work. Making it one click would
+be a liability, not a feature.
+
+NO BRANCHES. It shows which branch you are on and never asks you
+about it. If you need a branch, that is a conversation, not a button.
+
+NO FORKS OR PULL REQUESTS. Contributing to somebody else's repo
+(Martin's three) is a different shape of job and a mistake there
+lands in another person's project. That stays a walkthrough until
+your own repos are boring.
+
+NO STAGING. Git's "index" is the single most confusing idea it has
+and it buys nothing for one person. Save takes everything.
+
+
+--------------------------------------------------------------------
+WHAT IS IN THIS FOLDER
+--------------------------------------------------------------------
+    Git Desk.pyw           the app -- double-click this
+    git_desk_core.py       every git and gh command it runs
+    git_desk_folders.json  the folders you have opened (made on use)
+
+Both files must stay together.
+
+Plain Python, standard library only. No installer, no downloads. The
+code is written to be read, and git_desk_core.py runs on its own from
+a console if you ever want to check something without the window:
+
+    python git_desk_core.py C:\Users\kye\Desktop\Kyio-s-Rose-Mods
+
+
+--------------------------------------------------------------------
+WHAT IT NEEDS ON THE MACHINE
+--------------------------------------------------------------------
+Git for Windows, and the GitHub CLI (gh). You have both.
+
+gh is what holds your logins, so no password or token is ever typed
+into this app or stored by it. If a sign-in is needed, gh opens its
+own window and handles it.
+
+Git is run with terminal prompts turned OFF. Without that, git could
+decide to ask for a username on a terminal that does not exist -- and
+the app would sit there forever with nothing on screen and no way to
+answer. Off, it fails in a second with something you can read.
+
+
+--------------------------------------------------------------------
+KNOWN LIMITS, SAID PLAINLY
+--------------------------------------------------------------------
+COPYING A BUNDLE OVER A FOLDER CANNOT DELETE ANYTHING. If a set of
+files is handed to you and one file has been REMOVED since last time,
+the new copy simply does not contain it -- and the old one stays on
+disk, gets saved, and stays in the repo. Deletions have to be done by
+hand. The Deleted list is there so you can see whether they took.
+
+THE AHEAD/BEHIND FIGURES ARE AS FRESH AS THE LAST CHECK. Pressing
+"What changed" asks GitHub. If it cannot reach it, it says so and
+shows the previous answer rather than pretending.
+
+IT ONLY OPENS FOLDERS THAT ARE ALREADY CLONES. Setting a new one up
+is a one-time job and is better done together than by a wizard you
+use once.
