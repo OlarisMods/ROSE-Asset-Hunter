@@ -41,9 +41,8 @@ This makes the game tell you instead.
 look. Whatever you are chasing has its own name written across it.
 
 **Backward — "where is this *used*?"** Type a filename and press Find it. Every
-place that file is drawn lights up at once. If nothing matches, that name does
-not exist in the archive — worth knowing before you spend an evening looking
-for it.
+place that file is drawn lights up at once.If nothing matches, the tool 
+cannot see that name — which is not quite the same as it not existing. See below.
 
 ---
 
@@ -114,6 +113,16 @@ effect uses and work backwards.
 
 **Some things are encrypted and out of reach entirely** — fonts, some model
 chains, and part of the archive index.
+
+**The name list is incomplete.** Names and pixels are stored separately in
+the archive, and this tool reads the names it can find. Some assets are
+real and in use but have no readable name entry — a search for
+`_critical_01.dds` comes back empty even though that file exists. So an
+empty result means "not found", never "not there".
+
+The same applies to effects: this reads about 211 particle records, and a
+full sweep of the archive finds 652. Marking a texture and looking at it
+in game is the reliable method; searching by name is the convenient one.
 
 ---
 
