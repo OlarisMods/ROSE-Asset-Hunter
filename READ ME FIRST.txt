@@ -1,10 +1,10 @@
 ====================================================================
-  GIT DESK
+  ROSE ASSET HUNTER
 ====================================================================
 
-See what changed, save it, send it to GitHub. Any folder, any project.
+Find out what any texture or model in ROSE Online is called.
 
-  Double-click "Git Desk.pyw".  Nothing to install.
+  Double-click "ROSE Asset Hunter.pyw".  Nothing to install.
 
   The .pyw ending is deliberate -- it stops Windows opening a
   black console window behind the app.
@@ -13,196 +13,310 @@ See what changed, save it, send it to GitHub. Any folder, any project.
 --------------------------------------------------------------------
 WHAT IT IS FOR
 --------------------------------------------------------------------
-Git is two different tools wearing one name: a history tool that runs
-on your machine, and a protocol for a team to collaborate. Its
-vocabulary -- index, HEAD, refspec, origin, upstream -- was written
-for the second one.
+ROSE assets do not tell you what they are. A texture is just pixels, a
+model is just triangles, and a particle file does not even contain its
+own filename.
 
-Almost none of that is load-bearing for saving work and sending it
-somewhere. So this hides the vocabulary and keeps the commands
-visible. Every button prints the command before it runs it and the
-answer afterwards.
+So the first problem in any mod is finding out WHICH file you need,
+and nothing in the game will tell you. People end up guessing, or
+replacing files one at a time to see what changes.
 
-You are not meant to memorise them. You are meant to be able to see
-them, and to stop needing to.
+This makes the game tell you instead.
 
 
 --------------------------------------------------------------------
-THE FOUR IDEAS YOU ACTUALLY NEED
+TWO WAYS ROUND
 --------------------------------------------------------------------
-1. A SAVE is a labelled point in your work. It is on your machine
-   only. Nothing about it has reached GitHub.
+FORWARD -- "what IS that thing?"
+    Pick a folder, install markers, go and look. Whatever you are
+    chasing will have its own name written across it.
 
-2. SEND is a separate act. It is what puts your saves on GitHub.
-   That is why they are two buttons and not one.
+BACKWARD -- "where is this USED?"
+    Type a filename into the box and press Find it. Every place that
+    file is drawn will light up at once.
 
-3. GITHUB CAN BE AHEAD OF YOU. If you changed something on the
-   website, or from another machine, your copy is behind and it has
-   to catch up before it can send.
+    This doubles as a search -- but read an empty result carefully. It
+    means the tool cannot find that name, not that the file is absent.
 
-4. YOUR ACCOUNT IS A SETTING ON THE MACHINE, not on the folder.
+    Names and pixels are stored apart in the archive, and some assets
+    are real and in use with no readable name entry. _critical_01.dds
+    is one: it exists, and a search for it comes back with nothing.
 
-That last one is the whole reason this exists, so it gets its own
-section.
+    The same goes for effects. This reads about 211 particle records,
+    and a full sweep of the archive finds 652.
 
-
---------------------------------------------------------------------
-WHY THE ACCOUNT LINE IS THE MOST IMPORTANT THING HERE
---------------------------------------------------------------------
-You have two GitHub accounts. Some folders belong to one, some to the
-other. But git does not know that: the ACTIVE ACCOUNT is one setting
-for the whole machine, and the FOLDER you are standing in is a
-separate thing entirely. Nothing connects them.
-
-So you are expected to remember, every single time, which account
-goes with which folder -- and if you get it wrong you find out from a
-failed push that looks like a permissions problem and is not.
-
-Git Desk works it out instead. Every clone knows the address it came
-from, and that address contains the owner:
-
-    github.com/OlarisMods/Kyio-s-Rose-Mods    needs OlarisMods
-    github.com/moonraven3085/OlarisLabs       needs moonraven3085
-
-It reads that, compares it to whichever account is actually active,
-and says so on screen before anything is sent. When they do not
-match, the line turns red and grows a button that switches for you.
-
-It also checks AGAIN at the moment you press Send, because the
-account can be changed from a console without this window hearing
-about it, and a conclusion that was true five minutes ago is not
-evidence.
+    So an empty result means "not found", never "not there". Marking a
+    texture and looking at it in game is the reliable method; searching
+    by name is the convenient one.
 
 
 --------------------------------------------------------------------
-THE FOUR BUTTONS
+HOW TO USE IT
 --------------------------------------------------------------------
-WHAT CHANGED
-    Runs by itself when you open a folder, and after everything else.
-    Read-only -- it cannot do any harm, so there is no reason not to
-    press it.
+1. Point it at your ROSE Online folder.
+2. Press "Read the archive". This lists every texture and model the
+   game names, so you pick from what is REALLY there rather than from
+   a guess.
+3. Pick a folder. The files inside appear below it -- take the whole
+   folder, or select individual files, or filter to only textures or
+   only models. Or type one filename in the box to find it wherever
+   it lives.
+4. CLOSE THE GAME, press "Install markers", then start it and look.
+5. Press "Restore everything" when you are done.
 
-    Four lists, and the fourth is the one worth knowing about:
-
-      New       files that were not there before
-      Changed   files that were
-      Deleted   files that have gone
-      Skipped   files .gitignore is leaving out
-
-    SKIPPED IS THERE BECAUSE OF A REAL INCIDENT. A file matched by
-    .gitignore does not appear in git's own status in ANY form. Not
-    marked as excluded -- simply absent. That is how a .preview
-    folder went missing from a set of profiles, and how you find out
-    from the person you sent them to rather than from your screen.
-
-SAVE
-    Takes everything, with a message. Before it saves, it tells you
-    how much it is adding to the history, permanently.
-
-    That number matters for packs. Zips, textures and models do not
-    compress against each other, so every version of one is kept
-    whole and forever. Nothing that is saved is ever removed later.
-
-    It stops outright at 95 MB in a single file. GitHub refuses
-    anything over 100 MB, and it refuses it when you SEND -- long
-    after the save that was the actual problem. By then the file is
-    in the history and getting it out is genuinely hard.
-
-    WHAT THIS COSTS YOU: it always takes everything. You cannot save
-    half your changes. For one person working alone that is a good
-    trade, but it is a trade and you should know about it.
-
-SEND
-    Puts your saves on GitHub. Sets things up automatically the first
-    time a branch is sent.
-
-    It will not send if anything is genuinely in the way, and it
-    lists EVERY reason at once rather than the first one. That is
-    deliberate: three loot beam faults shipped because each was found
-    and fixed on its own, and each repair quietly undid the one
-    before it.
-
-PUBLISH A RELEASE
-    Not in this version. It is next, and it is the one that needs the
-    most care -- see the last section.
+Anything that takes a while -- reading the archive, extracting,
+browsing -- can be stopped with the Cancel button. It stops at the
+next safe point rather than being killed, so nothing is left
+half-written.
 
 
 --------------------------------------------------------------------
-WHEN GITHUB IS AHEAD OF YOU
+THREE WAYS OF MARKING
 --------------------------------------------------------------------
-A line appears saying so, with a "Get them" button.
+NAMES ACROSS IT
+    The default. Good for anything reasonably large.
 
-That button only ever does the safe version: bring changes down when
-that is all it is, and REFUSE if both sides have changed. If both
-sides changed, that is a real decision about which version wins, and
-an app should not make it quietly by pressing a button. It stops,
-touches nothing, and says so.
+NAMES SIDEWAYS
+    For tall thin things. Some effects draw particles as narrow
+    vertical slivers, and flat lettering gets squeezed into something
+    unreadable. Turning it a quarter turn puts the name along the long
+    axis instead.
+
+FLAT COLOURS
+    For very small things. Colour needs no resolution -- one lit pixel
+    still carries its hue -- so when a sprite is a few pixels across,
+    colour is all that survives.
+
+    A colour says nothing on its own, so a key naming every colour is
+    written to ROSE_HUNT_KEY.txt in your game folder. Restore removes
+    it along with everything else.
 
 
 --------------------------------------------------------------------
-WHAT IS DELIBERATELY MISSING
+WHERE MARKERS DO NOT HELP
 --------------------------------------------------------------------
-NO UNDO. There is no button to un-send, un-save or rewrite history,
-and there is not going to be. Rewriting published history is the one
-git operation that can genuinely lose work. Making it one click would
-be a liability, not a feature.
+INTERFACE ART. Window frames and gauges are cut from an atlas one or
+two pixels at a time, so a name written across the file never appears
+whole on screen -- you get a sliver of a letter. Marking still tells
+you WHICH atlas changed, which is usually the question, but it will
+not read as text.
 
-NO BRANCHES. It shows which branch you are on and never asks you
-about it. If you need a branch, that is a conversation, not a button.
+PARTICLE FILES AND EFFECT WRAPPERS cannot be marked at all. Those
+records do not contain their own names, so there is nothing to label.
+Find the textures an effect uses instead and work backwards.
 
-NO FORKS OR PULL REQUESTS. Contributing to somebody else's repo
-(Martin's three) is a different shape of job and a mistake there
-lands in another person's project. That stays a walkthrough until
-your own repos are boring.
+Some things are encrypted and out of reach entirely -- fonts, some
+model chains, and part of the archive index.
 
-NO STAGING. Git's "index" is the single most confusing idea it has
-and it buys nothing for one person. Save takes everything.
+
+--------------------------------------------------------------------
+LOOKING BEFORE YOU PULL
+--------------------------------------------------------------------
+"Browse textures..." shows the textures inside the app, read straight
+out of the archive. Nothing touches your disk until you pick one.
+
+Click a thumbnail to select it, ctrl-click to add more, then press
+"Save selected" -- only those files are written, each as a .dds you can
+edit and a .png you can look at.
+
+Sort by where it was found, by size, by format, or BY COLOUR. Colour is
+the one worth knowing about: effect textures are mostly one hue each,
+so all the fire lands together and all the ice lands together, and you
+can often spot what you want without knowing anything about it.
+
+That is usually the better way round: find the thing you want, take
+only that, instead of extracting thousands and searching through them.
+
+You are asked for a size band first, because that is what makes the
+grid a page instead of a wall. Reading stops when you press Stop
+reading, or at 600 textures.
+
+
+--------------------------------------------------------------------
+GETTING EVERYTHING OUT AT ONCE
+--------------------------------------------------------------------
+"Extract textures..." pulls every texture in the archive out to a
+folder, each saved as a .dds and a .png you can look at.
+
+Marking tells you WHAT something is. This gets you the pixels, which is
+what you need if you want to RECOLOUR something rather than redraw it
+-- and redrawing from scratch is how a lot of mods end up looking like
+a different effect wearing the same name.
+
+They come out NUMBERED, not named. The archive index cannot fetch a
+file by name -- its offsets are not positions you can seek to, and
+land in unrelated data -- so textures are found by their own header
+instead. That recovers the pixels but not the filename, because the
+two are stored apart.
+
+Everything lands in a folder of its own, named with the date, and
+sorted inside that by format and then by dimensions:
+
+    ROSE_Extract_2026-09-06_0111/
+        raw/256x256/
+        DXT1/512x512/
+
+So it never scatters loose files into whatever folder you picked.
+
+You are asked which SIZES to pull before it starts. That matters --
+everything is a few thousand files that are miserable to search, while
+one size band is usually a few dozen. You cannot ask for a file by
+name, but you can ask for its shape.
+
+In practice: pick the band, sort by size in Explorer, turn on large
+thumbnails, and the one you want is usually obvious.
+
+
+--------------------------------------------------------------------
+GETTING THE INTERFACE FILES OUT
+--------------------------------------------------------------------
+"Extract interface files..." saves every interface document and
+stylesheet as readable text.
+
+This is the one worth reaching for most often. Every interface change
+starts by reading one of these -- what a window is made of, which
+sprite rectangles a sheet declares, which colours a theme sets.
+
+Unlike textures, these come out PROPERLY NAMED, because they say what
+they are: a document declares <body id="hud">, and a stylesheet names
+the image it draws from. So you get hud.html and stateicon.css rather
+than numbers.
+
+    documents/     the windows -- hud, minimap, chat, inventory ...
+    stylesheets/   the sprite sheets and theme colours
+
+Both are plain text. Edit a copy, drop it in the matching folder under
+your ROSE install, and the game will load yours instead -- documents
+and most stylesheets are read from disk in preference to the archive.
+
+
+--------------------------------------------------------------------
+LOOKING AT MODELS INSTEAD OF REPLACING THEM
+--------------------------------------------------------------------
+"Browse models..." reads the game's models straight out of the archive
+and draws each as a wireframe. Nothing is installed, so nothing can
+crash.
+
+This is the better answer to the model problem. Marking models to find
+out what they are will often take the client down, and the crash report
+cannot say which file did it -- but nothing stops us simply reading
+them and drawing what is there. A wireframe is enough to tell a sword
+from a shield from a ring.
+
+Selected models can be saved as a plain text list of points and
+triangles.
+
+
+--------------------------------------------------------------------
+A WARNING ABOUT MODELS
+--------------------------------------------------------------------
+Replacing textures is safe. Replacing MODELS can crash the game --
+some are animated by data that expects an exact shape and will not
+accept a substitute.
+
+Models are switched OFF until you tick the box, and the game will warn
+you again before writing. Nothing is damaged if it crashes: press
+Restore and it is fine.
+
+Some world, map and character TEXTURES can crash it too, for the same
+reason -- the client expects a particular size. Those get a warning of
+their own.
+
+BE CLEAR ABOUT WHAT THE WARNINGS ARE. They do not prevent a crash and
+cannot -- there is no way to know in advance which assets the client
+will refuse. They tell you a crash is LIKELY so it is not a surprise.
+
+AND THE CRASH REPORT CANNOT TELL YOU WHICH FILE DID IT. A Windows
+minidump records the call stack as addresses inside trose.exe. Turning
+those into names needs the symbol file Rednim builds and does not ship,
+and even with it the answer would be "crashed inside the mesh loader",
+not "crashed on this file" -- the filename is a local variable a dump
+does not keep.
+
+SO BE HONEST ABOUT MARKING MODELS IN BULK: it is not much use. Marking
+a whole folder of models will often just crash, and nothing tells you
+which one caused it.
+
+Where model marking DOES earn its place is when you already know the
+name and want to see where it is used -- one file, one question, no
+guessing. Use the file list to pick individual models rather than
+taking a folder at a time.
+
+
+--------------------------------------------------------------------
+WILL IT WORK ON MY VERSION?  WILL AN UPDATE BREAK IT?
+--------------------------------------------------------------------
+Probably yes, and probably not -- because of how it finds things.
+
+It does not know any file paths, offsets or version numbers. It finds
+assets by what they ARE: a texture begins with the letters DDS, a model
+begins with ZMS, an effect file has a structure that only a real one
+satisfies. Those have not changed in twenty years and are the same in
+every build and on every server.
+
+So:
+
+  A GAME UPDATE            should change nothing. Names and positions
+                           move; the tool re-reads them every time and
+                           never remembers where anything was.
+
+  A PRIVATE SERVER         should work, and sometimes better. Many run
+                           older clients with less locked down, and the
+                           folder list is built from whatever that
+                           install actually contains rather than from
+                           assumptions about it.
+
+  A VERY OLD CLIENT        the textures and effects should be fine.
+                           Models are read as ZMS version 7 and 8; an
+                           older version would simply not appear.
+
+THE ONE THING THAT WOULD BREAK IT is the archive being encrypted. The
+index file, data.idx, ALREADY IS on the current official client -- it
+used to hold a readable list of filenames and no longer does. If the
+main archive ever goes the same way, nothing here can read it and no
+amount of fixing would help.
+
+That is worth knowing before relying on it. Everything this does
+depends on the archive being readable, and that is somebody else's
+decision.
+
+
+--------------------------------------------------------------------
+IS THIS SAFE FOR MY GAME?
+--------------------------------------------------------------------
+Yes, and here is exactly why.
+
+ROSE loads loose files in preference to the ones in its archives. This
+tool only ever writes loose files -- it never opens, edits or damages
+rose.vfs or anything the game shipped with. Deleting what it wrote
+puts everything back precisely as it was.
+
+It records every file it writes, so Restore removes exactly those and
+touches nothing else.
+
+It does not talk to the server, does not change how the game plays,
+and gives no advantage. It is a way of reading labels.
+
+
+--------------------------------------------------------------------
+WHY IT RE-READS THE ARCHIVE EVERY TIME
+--------------------------------------------------------------------
+It would be faster to save the list. It once was, and that list
+quietly covered only about 62% of what the archive actually names -- so
+a long search failed for days, looking through a set that never held
+the answer.
+
+The scan takes a couple of minutes. It is worth it.
 
 
 --------------------------------------------------------------------
 WHAT IS IN THIS FOLDER
 --------------------------------------------------------------------
-    Git Desk.pyw           the app -- double-click this
-    git_desk_core.py       every git and gh command it runs
-    git_desk_folders.json  the folders you have opened (made on use)
+    ROSE Asset Hunter.pyw  the app -- double-click this
+    rose_hunt_core.py      scanning, markers, install, restore
+    rose_font.py           a hand-built font, so nothing needs installing
 
-Both files must stay together.
+All three must stay together.
 
-Plain Python, standard library only. No installer, no downloads. The
-code is written to be read, and git_desk_core.py runs on its own from
-a console if you ever want to check something without the window:
-
-    python git_desk_core.py C:\Users\kye\Desktop\Kyio-s-Rose-Mods
-
-
---------------------------------------------------------------------
-WHAT IT NEEDS ON THE MACHINE
---------------------------------------------------------------------
-Git for Windows, and the GitHub CLI (gh). You have both.
-
-gh is what holds your logins, so no password or token is ever typed
-into this app or stored by it. If a sign-in is needed, gh opens its
-own window and handles it.
-
-Git is run with terminal prompts turned OFF. Without that, git could
-decide to ask for a username on a terminal that does not exist -- and
-the app would sit there forever with nothing on screen and no way to
-answer. Off, it fails in a second with something you can read.
-
-
---------------------------------------------------------------------
-KNOWN LIMITS, SAID PLAINLY
---------------------------------------------------------------------
-COPYING A BUNDLE OVER A FOLDER CANNOT DELETE ANYTHING. If a set of
-files is handed to you and one file has been REMOVED since last time,
-the new copy simply does not contain it -- and the old one stays on
-disk, gets saved, and stays in the repo. Deletions have to be done by
-hand. The Deleted list is there so you can see whether they took.
-
-THE AHEAD/BEHIND FIGURES ARE AS FRESH AS THE LAST CHECK. Pressing
-"What changed" asks GitHub. If it cannot reach it, it says so and
-shows the previous answer rather than pretending.
-
-IT ONLY OPENS FOLDERS THAT ARE ALREADY CLONES. Setting a new one up
-is a one-time job and is better done together than by a wizard you
-use once.
+Plain Python, standard library only. No installer, no downloads, no
+network access. The code is written to be read.
