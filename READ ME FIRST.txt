@@ -42,8 +42,23 @@ BACKWARD -- "where is this USED?"
     are real and in use with no readable name entry. _critical_01.dds
     is one: it exists, and a search for it comes back with nothing.
 
-    The same goes for effects. This reads about 211 particle records,
-    and a full sweep of the archive finds 652.
+    IF YOU HAVE A NAME TABLE, this can use it. Put a file called
+    rose_names.json next to the app -- a list of entries saying
+    {"name": ..., "offset": ..., "length": ...} -- and effects,
+    textures, meshes and sounds will show their real filenames instead
+    of an offset.
+
+    NONE IS INCLUDED, and nothing is downloaded. Without one, the tool
+    behaves exactly as it always has.
+
+    Every entry is CHECKED against your own archive before it is used:
+    is there really a texture at that offset, does it really run that
+    long. Anything that points somewhere else is dropped and the count
+    is reported. A name that is wrong is worse than no name at all --
+    you would edit the file it told you to and not find out for weeks.
+
+    Effects are read a different way and are not affected by this --
+    every particle record in the archive is found, aligned or not.
 
     So an empty result means "not found", never "not there". Marking a
     texture and looking at it in game is the reliable method; searching
@@ -218,7 +233,44 @@ Models are switched OFF until you tick the box, and the game will warn
 you again before writing. Nothing is damaged if it crashes: press
 Restore and it is fine.
 
-Some world, map and character TEXTURES can crash it too, for the same
+MOST MODELS ARE ACTUALLY FINE. All 133 meshes in effect\effectmesh
+were marked one at a time, and 124 of them worked. Nine did not:
+
+    _jemitem_01 .. _jemitem_06
+    _pumpkin_01
+    _warp_join_01, _warp_join_02
+
+Those nine are refused now. Why those nine is still unknown -- they
+fall into three families, which points at something structural rather
+than nine separate faults, but nothing here can see the difference yet.
+
+So the warning stands, and it is narrower than it was: models are
+worth trying, and the ones known to fail are named.
+
+TERRAIN TILES CANNOT BE MARKED AT ALL, and the app refuses rather than
+letting you try. The game loads a tile set as ONE thing and rejects it
+unless every tile agrees on size and format. Its own words:
+
+    All terrain textures must be the same dimensions, image
+    'S002_01.dds' with size 128 x 128 does not match previous image
+    'T025_01.dds' with size of 256 x 256.
+
+    All terrain textures must be the same compression format, image
+    'S002_01.dds' with format RGBA8 does not match previous image
+    'T025_01.dds' with format of BC3.
+
+Markers are 128x128 and uncompressed; those tiles are 256x256 BC3.
+
+Marking the WHOLE folder does not rescue it. Every one of the 109
+names the archive gives for junon\jg was marked and the game still
+objected about T025_01.dds -- a tile it loads that is not in the name
+list at all. The set cannot be made to agree because the set cannot
+be seen.
+
+Use Browse textures for terrain instead. Nothing is installed, so
+there is nothing for the game to refuse.
+
+Some map and character TEXTURES can still crash it, for the same
 reason -- the client expects a particular size. Those get a warning of
 their own.
 
@@ -241,6 +293,54 @@ Where model marking DOES earn its place is when you already know the
 name and want to see where it is used -- one file, one question, no
 guessing. Use the file list to pick individual models rather than
 taking a folder at a time.
+
+
+
+MARKING EFFECTS
+    The same idea as marking a texture, one level along. Pick some
+    effects, and each is replaced by a marker drawing its own NUMBER.
+    Go and do the thing you are chasing, and whichever number appears
+    is the effect that fired. The numbers are listed in
+    ROSE_HUNT_KEY.txt next to the game.
+
+    This is how c_hit_01 was found -- the effect that draws every
+    ranged critical in the game and has nothing in its name to say so.
+    Searching by name had failed for two days. Sixteen numbered
+    markers answered it in one fight.
+
+    A NAME TABLE DOES NOT REPLACE THIS. A table tells you what an
+    effect is CALLED. It cannot tell you which one FIRES when you do
+    something, and in this game those come apart badly:
+
+      ATSPEED_UP_01.PTL   named for the attack speed buff, never plays
+      DEFENDUP_01.PTL     actually draws the attack speed buff
+      c_hit_01.PTL        draws every ranged critical
+
+    Keep the selection small. Sixteen or so is comfortable; a hundred
+    numbers on screen tells you nothing.
+
+    Effects are marked on their own -- not mixed with textures in the
+    same run -- because they are written differently.
+
+SOUNDS
+    Browse sounds lists every piece of audio in the archive with its
+    length, channels and bitrate. Long ones are usually music, short
+    ones are effects.
+
+    There are TWO kinds in there and the list says which:
+
+      WAV   sound effects. These play in the app, straight away --
+            nothing to install, no codec.
+      OGG   music. Windows will not play Ogg inside the app (tried),
+            so these open in whatever player you already have. If it
+            asks for a codec, that is Windows, not this.
+
+    Nothing is decoded to build the list. Both formats state their own
+    channels, sample rate and length in plain fields before any
+    compressed audio begins -- so the whole archive is described
+    without touching a single sample.
+
+    Save selected writes them out as ordinary .ogg files.
 
 
 --------------------------------------------------------------------

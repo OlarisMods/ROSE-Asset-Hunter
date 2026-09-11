@@ -871,6 +871,11 @@ def hue_of(rgb):
 
 # ---------------------------------------------------------------- meshes
 
+# Older ZMS versions that turned up and could not be read, counted so the
+# browser can say so rather than quietly showing a short list.
+SKIPPED_VERSIONS = {}
+
+
 def read_zms(blob):
     """Enough of a ZMS to draw it. Points and triangles, nothing else.
 
@@ -878,7 +883,15 @@ def read_zms(blob):
     models to find out what they are can crash the client, and no crash report
     says which file did it. Reading them instead means never having to.
     """
-    if blob[:7] != b'ZMS0008' and blob[:7] != b'ZMS0007':
+    # Only versions 7 and 8 are understood. The scanner searches for 'ZMS000',
+    # so it FINDS older ones and then drops them here -- which used to happen
+    # silently, leaving a count that looked complete when it was not. The
+    # version is reported now so the caller can say how many were skipped.
+    version = bytes(blob[:7])
+    if version not in (b'ZMS0008', b'ZMS0007'):
+        if version.startswith(b'ZMS000'):
+            SKIPPED_VERSIONS[version.decode('ascii', 'replace')] = \
+                SKIPPED_VERSIONS.get(version.decode('ascii', 'replace'), 0) + 1
         return None
     try:
         offset = 8
@@ -902,8 +915,31 @@ def read_zms(blob):
             offset += count * 12                        # normals
         if fmt & 8:
             offset += count * 8                         # uv0
-        for flag, size in ((0x10, 8), (0x20, 8), (0x40, 8),
-                           (0x80, 16), (0x100, 16), (0x200, 12)):
+        # UV sets are 8 bytes each -- two floats. 0x80 was 16 here, which made
+        # the reader consume 40 bytes a vertex on the game's own format
+        # (0x400086 = position + normal + UV1, 32 bytes) and then read the face
+        # count from the wrong place entirely. A mesh with 964 triangles was
+        # reported as having 34,238.
+        #
+        # zms_lib.py in the corpus has always had this right; this reader was
+        # written separately and drifted.
+        # Sizes worked out from real meshes, by finding the face block whose
+        # indices are all valid vertex numbers -- a wrong stride cannot pass
+        # that test.
+        #
+        #   0x10  bone weights   16  (four floats)
+        #   0x20  bone indices    8  (four shorts)
+        #   0x80  UV              8  (two floats)
+        #
+        # 0x86 = position + normal + UV        = 32 bytes a vertex
+        # 0xB6 = the same plus bone data       = 56 bytes a vertex
+        #
+        # Both were wrong here. 0x10 was 8 rather than 16, so every skinned
+        # mesh -- all the avatar and character models -- read its face count
+        # from the wrong place: 76 vertices reported as 39,831 triangles, and
+        # the wireframes drew stray lines between unrelated points.
+        for flag, size in ((0x10, 16), (0x20, 8), (0x40, 8),
+                           (0x80, 8), (0x100, 16), (0x200, 12)):
             if fmt & flag:
                 offset += count * size
         faces = struct.unpack_from('<H', blob, offset)[0]
@@ -914,7 +950,11 @@ def read_zms(blob):
         for _ in range(faces):
             triangles.append(struct.unpack_from('<3H', blob, offset))
             offset += 6
-        return {'points': points, 'faces': triangles}
+        # The parser knows exactly where the mesh ended, so it says so. Working
+        # the length out separately means two pieces of code guessing at the
+        # vertex stride from the format flags, and they disagreed -- one of them
+        # wrote out 1248 bytes of whatever followed the mesh in the archive.
+        return {'points': points, 'faces': triangles, 'length': offset + 6}
     except struct.error:
         return None
 
@@ -949,16 +989,50 @@ def browse_meshes(vfs_path, limit=None, progress=None, should_stop=None,
                 mesh = read_zms(blob)
                 if not mesh:
                     continue
-                mesh['offset'] = position + at
-                results.append(mesh)
+                # KEEP A SUMMARY, NOT THE GEOMETRY.
+                #
+                # This used to keep every vertex and triangle of every mesh.
+                # Eight thousand meshes at a few hundred vertices each is
+                # gigabytes of Python tuples that are never freed, and the
+                # scan slowed to a crawl as it went.
+                #
+                # The texture browser already solved this -- it holds a
+                # description and re-reads pixels from the archive when a
+                # picture is actually wanted. Meshes now do the same. A page of
+                # twelve is re-read in milliseconds, and nothing is held that
+                # is not on screen.
+                points = mesh['points']
+                xs = [v[0] for v in points]
+                ys = [v[1] for v in points]
+                zs = [v[2] for v in points]
+                summary = {'offset': position + at,
+                           'npoints': len(points),
+                           'nfaces': len(mesh['faces']),
+                           'min': (min(xs), min(ys), min(zs)) if points else (0, 0, 0),
+                           'max': (max(xs), max(ys), max(zs)) if points else (0, 0, 0)}
+                results.append(summary)
                 if on_found:
-                    on_found(mesh)
+                    on_found(summary)
             position += window
             if progress:
                 progress(min(1.0, position / float(size)))
             if should_stop and should_stop():
                 break
     return results
+
+
+def read_mesh_at(vfs_path, offset):
+    """Re-read one mesh's geometry from the archive.
+
+    Called when a mesh is actually going to be drawn or saved, so nothing is
+    held in memory for the thousands that are not on screen.
+    """
+    try:
+        with open(vfs_path, 'rb') as handle:
+            handle.seek(offset)
+            return read_zms(handle.read(4 << 20))
+    except (OSError, ValueError):
+        return None
 
 
 def save_one(item, out_folder, vfs_path=None):
@@ -1033,19 +1107,157 @@ def save_many_as_zip(items, zip_path, vfs_path):
     return zip_path
 
 
-def save_meshes_as_zip(meshes, zip_path):
-    """The same for models, written as plain point-and-triangle lists."""
+def save_meshes_as_zip(meshes, zip_path, vfs_path=None, names=None):
+    """Write models out -- the real .zms bytes, plus a readable point list.
+
+    TWO THINGS WERE WRONG HERE.
+
+    It read mesh['points'], which stopped existing when the browser was changed
+    to hold a summary and re-read geometry on demand. The result was an
+    exception and a zip containing nothing at all -- 22 bytes, just the end
+    marker. A save that fails should say so, not produce an empty file.
+
+    And it only ever wrote a text list of coordinates. That is fine for
+    reading, useless for anything else: you cannot put it back in the game,
+    compare it to another mesh, or open it in a tool. So the actual bytes from
+    the archive go in as a proper .zms, and the text list goes alongside it.
+    """
     import zipfile
+    written = 0
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as bundle:
         for mesh in meshes:
-            lines = ["found at %d in the archive" % mesh['offset'],
-                     "%d points, %d triangles" % (len(mesh['points']),
-                                                  len(mesh['faces'])), ""]
-            lines += ["v %.4f %.4f %.4f" % point for point in mesh['points']]
-            lines += ["f %d %d %d" % face for face in mesh['faces']]
-            bundle.writestr('mesh_%09d.txt' % mesh['offset'],
-                            "\r\n".join(lines))
+            offset = mesh['offset']
+            stem = (names or {}).get(offset, '').rsplit('\\', 1)[-1]
+            stem = stem or 'mesh_%09d' % offset
+            if stem.lower().endswith('.zms'):
+                stem = stem[:-4]
+
+            shape = mesh if 'points' in mesh else None
+            if shape is None and vfs_path:
+                shape = read_mesh_at(vfs_path, offset)
+
+            # The real file, byte for byte out of the archive.
+            if vfs_path:
+                try:
+                    with open(vfs_path, 'rb') as handle:
+                        handle.seek(offset)
+                        raw = handle.read(4 << 20)
+                    length = zms_length(raw)
+                    if length:
+                        bundle.writestr(stem + '.zms', raw[:length])
+                        written += 1
+                except OSError:
+                    pass
+
+            if shape and shape.get('points'):
+                lines = ["found at %d in the archive" % offset,
+                         "%d points, %d triangles" % (len(shape['points']),
+                                                      len(shape['faces'])), ""]
+                lines += ["v %.4f %.4f %.4f" % point for point in shape['points']]
+                lines += ["f %d %d %d" % face for face in shape['faces']]
+                bundle.writestr(stem + '.txt', "\r\n".join(lines))
+                written += 1
+    if not written:
+        raise ValueError("nothing could be read for those models")
     return zip_path
+
+
+def zms_length(blob):
+    """How many bytes the mesh at the start of this buffer occupies.
+
+    Asks the parser rather than working it out again -- see read_zms.
+    """
+    mesh = read_zms(blob)
+    return mesh['length'] if mesh else 0
+
+
+# ------------------------------------------------------------ effect markers
+#
+# The app can answer "which texture is this?" and "which model is this?" by
+# writing a marker and looking at the game. It could not answer "which EFFECT
+# is this?" -- and that is the question that took two days over the crit.
+#
+# The answer turned out to be the same trick one level along: put a numbered
+# marker at every candidate effect path, land the thing you are chasing, and
+# read the number off the screen. c_hit_01 was found that way after searching
+# by name had failed completely, because its name says nothing about crits.
+#
+# A name table does not replace this. A table says what an effect is CALLED.
+# It cannot say which one FIRES when you do something -- and those come apart
+# badly: ATSPEED_UP_01 is named for the buff and never plays, c_hit_01 is named
+# for nothing in particular and draws every ranged critical in the game.
+
+
+def marker_particle(number, size=128):
+    """A one-emitter effect that draws a big number, and its texture.
+
+    Built from a fixed template rather than copied from a game file. An
+    earlier effort copied a working record and spent rounds fighting behaviour
+    that came with it -- a "vanilla aura" that flashed by itself, because the
+    fields nobody had looked at were still in there.
+
+    Returns (particle bytes, texture bytes, texture name).
+    """
+    label = '%02d' % number
+    texture_name = 'hunt_%s.dds' % label
+    path = ('3DData\\\\effect\\\\particles\\\\texture\\\\%s' % texture_name).encode('ascii')
+
+    emitter = bytearray()
+    name = b'"FireJet"'
+    emitter += struct.pack('<I', len(name)) + name
+    emitter += struct.pack('<ff', 6.0, 6.0)          # lifetime, long enough to read
+    emitter += struct.pack('<ff', 30.0, 30.0)        # emission rate, gentle
+    emitter += struct.pack('<i', 0)                  # loops: forever
+    emitter += b'\x00' * (92 - len(emitter) + 4 + len(name))
+    emitter = emitter[:4 + len(name) + 92]
+    emitter += struct.pack('<I', len(path)) + path
+    emitter += b'\x00' * 451                         # events: none
+
+    particle = struct.pack('<I', 1) + bytes(emitter)
+    return particle, marker_text(size, label, colour=(255, 255, 255),
+                                 background=(20, 0, 30)), texture_name
+
+
+def install_effect_markers(game_root, names, on_step=None):
+    """Put a numbered marker at each effect path, and record what was written.
+
+    Two files go out per effect -- the particle record and the numbered texture
+    it draws -- and BOTH are recorded, in the same manifest shape as every other
+    marker, so Restore removes them without knowing they were any different.
+
+    Returns (record, key). The key pairs each number with the effect it went to,
+    because nobody can hold sixteen of those in their head while playing.
+    """
+    written = []
+    key = []
+
+    def put(relative, blob):
+        target = os.path.join(game_root, relative.replace('\\', os.sep))
+        folder = os.path.dirname(target)
+        try:
+            if folder and not os.path.isdir(folder):
+                os.makedirs(folder)
+            existed = os.path.exists(target)
+            with open(target, 'wb') as handle:
+                handle.write(blob)
+            written.append({'path': relative, 'existed_before': existed})
+        except OSError as error:
+            written.append({'path': relative, 'error': str(error)})
+
+    for index, name in enumerate(names, 1):
+        particle, texture, texture_name = marker_particle(index)
+        put(name.lstrip('\\/'), particle)
+        put(os.path.join('3ddata', 'effect', 'particles', 'texture',
+                         texture_name).replace(os.sep, '\\'), texture)
+        key.append(('%02d' % index, [name]))
+        if on_step:
+            on_step(index, len(names))
+
+    record = {'when': time.strftime('%Y-%m-%d %H:%M:%S'),
+              'note': 'effect markers', 'files': written}
+    with open(os.path.join(game_root, MANIFEST), 'w') as handle:
+        json.dump(record, handle, indent=1)
+    return record, key
 
 
 # ---------------------------------------------------------------- particles
@@ -1125,15 +1337,36 @@ def parse_particle(buffer, at):
         return None
 
 
+# An emitter's name is stored quoted -- "FireJet", "star01", "number".
+# That is specific enough to find records by, and a regex does it at C speed
+# instead of testing every byte from Python.
+EMITTER_NAME = re.compile(rb'"[A-Za-z0-9_ .\-]{1,30}"')
+
+
 def browse_particles(vfs_path, progress=None, should_stop=None, on_found=None):
     """Find particle records in the archive and read what they draw.
 
-    Tries to parse at every position where a plausible emitter count sits. That
-    is a lot of attempts, but almost all fail on the first field, so it is far
-    cheaper than it sounds.
+    RECORDS ARE NOT ALIGNED. They are packed end to end, so where one starts
+    depends on the length of whatever came before it. An earlier version of
+    this stepped through the file four bytes at a time, which meant it could
+    only ever see records that happened to land on a multiple of four --
+    measured against a full sweep, that is 172 of 652. The other 480 were
+    invisible, and nothing said so; the list simply came back short and looked
+    complete.
+
+    So this does not step at all. It looks for the one thing every record
+    contains near its start -- a QUOTED emitter name -- and works backwards:
+
+        [count][name length]["FireJet"]...
+
+    The name is found by regex, which runs in C. Only then does it check
+    whether a sane count and length sit in front of it, and only then does it
+    try a full parse. Far fewer attempts than stepping every byte, and it
+    misses nothing for being unaligned.
     """
     size = os.path.getsize(vfs_path)
     results = []
+    seen = set()
     window = 8 << 20
     overlap = 1 << 20
     with open(vfs_path, 'rb') as handle:
@@ -1143,16 +1376,26 @@ def browse_particles(vfs_path, progress=None, should_stop=None, on_found=None):
             buffer = handle.read(window + overlap)
             if not buffer:
                 break
-            # A record begins with a small count, so only look where the next
-            # four bytes could be one.
-            for at in range(0, min(window, len(buffer) - 8), 4):
+            for match in EMITTER_NAME.finditer(buffer):
+                name_at = match.start()
+                # [count][name length][ "name" ] -- so the record starts eight
+                # bytes before the quote, if this is the FIRST emitter.
+                at = name_at - 8
+                if at < 0 or at >= window:
+                    continue
+                if struct.unpack_from('<I', buffer, name_at - 4)[0] != len(match.group()):
+                    continue
                 head = struct.unpack_from('<I', buffer, at)[0]
                 if not (1 <= head <= 64):
+                    continue
+                where = position + at
+                if where in seen:
                     continue
                 record = parse_particle(buffer, at)
                 if not record:
                     continue
-                record['offset'] = position + at
+                seen.add(where)
+                record['offset'] = where
                 results.append(record)
                 if on_found:
                     on_found(record)
@@ -1168,6 +1411,8 @@ def describe_particle(record):
     """A particle record written out the way you would want to read it."""
     lines = ["found at %d in the archive" % record['offset'],
              "%d emitter(s)" % len(record['emitters']), ""]
+    if record.get('name'):
+        lines.insert(0, record['name'])
     for number, emitter in enumerate(record['emitters']):
         lines.append("emitter %d   %s" % (number + 1, emitter['name']))
         lines.append("   texture      %s" % emitter['texture'])
@@ -1280,3 +1525,286 @@ def find_game_folder():
         if os.path.isfile(os.path.join(candidate, 'rose.vfs')):
             return candidate
     return ''
+
+
+# ------------------------------------------------------------------- audio
+#
+# ROSE's audio is Ogg Vorbis. Nothing in the standard library decodes
+# Vorbis, and a pure-Python decoder would be thousands of lines and far
+# too slow. It turns out not to matter: an Ogg file DESCRIBES itself in
+# plain fields before any compressed audio begins -- channels, sample
+# rate, bitrate -- and the last page carries a sample counter that gives
+# the length. So every sound can be listed with its duration and quality
+# without touching a single sample.
+#
+# Playback is handed to Windows, which has understood Ogg since Win10.
+
+
+
+def _page_at(buffer, at):
+    """Read an Ogg page header at this offset, or None.
+
+    A page is:
+        'OggS'                 4 bytes
+        version                1   -- always 0
+        header type            1   -- bit 1 = start of stream, bit 2 = end
+        granule position       8   -- samples produced so far
+        serial number          4   -- which stream this page belongs to
+        page sequence          4
+        checksum               4
+        segment count          1
+        segment table          n
+    """
+    if at + 27 > len(buffer) or buffer[at:at + 4] != b'OggS':
+        return None
+    if buffer[at + 4] != 0:                          # only version 0 exists
+        return None
+    flags = buffer[at + 5]
+    granule = struct.unpack_from('<q', buffer, at + 6)[0]
+    serial = struct.unpack_from('<I', buffer, at + 14)[0]
+    segments = buffer[at + 26]
+    table_end = at + 27 + segments
+    if table_end > len(buffer):
+        return None
+    body = sum(buffer[at + 27:table_end])
+    return {'flags': flags, 'granule': granule, 'serial': serial,
+            'header_len': 27 + segments, 'body_len': body,
+            'length': 27 + segments + body,
+            'first': bool(flags & 0x02), 'last': bool(flags & 0x04)}
+
+
+def _identification(buffer, at, page):
+    """Channels, sample rate and bitrate, from the first page's packet.
+
+    The Vorbis identification header is the first thing in the stream:
+
+        0x01 'vorbis'          7 bytes
+        version                4
+        channels               1
+        sample rate            4
+        bitrate maximum        4
+        bitrate nominal        4
+        bitrate minimum        4
+    """
+    start = at + page['header_len']
+    if start + 30 > len(buffer):
+        return None
+    if buffer[start:start + 7] != b'\x01vorbis':
+        return None
+    channels = buffer[start + 11]
+    rate = struct.unpack_from('<I', buffer, start + 12)[0]
+    nominal = struct.unpack_from('<i', buffer, start + 20)[0]
+    if not (1 <= channels <= 8) or not (1000 <= rate <= 192000):
+        return None
+    return {'channels': channels, 'rate': rate, 'bitrate': nominal}
+
+
+def _wave_at(buffer, at):
+    """A RIFF/WAVE file starting here, or None.
+
+    Sound effects are WAV, not Ogg -- the music is Ogg and the effects are not,
+    which is why a scan for OggS alone found nothing but map tracks.
+
+    A WAV states everything in plain fields:
+        'RIFF'  size  'WAVE'  then chunks, of which 'fmt ' and 'data' matter.
+    """
+    if at + 44 > len(buffer) or buffer[at:at + 4] != b'RIFF':
+        return None
+    if buffer[at + 8:at + 12] != b'WAVE':
+        return None
+    total = struct.unpack_from('<I', buffer, at + 4)[0] + 8
+    if not (44 <= total <= 64 << 20):
+        return None
+
+    channels = rate = bits = 0
+    data_bytes = 0
+    cursor = at + 12
+    limit = min(at + total, len(buffer))
+    while cursor + 8 <= limit:
+        tag = buffer[cursor:cursor + 4]
+        size = struct.unpack_from('<I', buffer, cursor + 4)[0]
+        if tag == b'fmt ' and cursor + 8 + 16 <= len(buffer):
+            channels = struct.unpack_from('<H', buffer, cursor + 10)[0]
+            rate = struct.unpack_from('<I', buffer, cursor + 12)[0]
+            bits = struct.unpack_from('<H', buffer, cursor + 22)[0]
+        elif tag == b'data':
+            data_bytes = size
+            break
+        cursor += 8 + size + (size & 1)                  # chunks are padded
+    if not (1 <= channels <= 8) or not (1000 <= rate <= 192000):
+        return None
+    per_second = rate * channels * max(1, bits // 8)
+    seconds = data_bytes / float(per_second) if per_second else 0.0
+    return {'kind': 'wav', 'length': min(total, len(buffer) - at),
+            'channels': channels, 'rate': rate,
+            'bitrate': per_second * 8, 'pages': 0, 'seconds': seconds}
+
+
+def browse_sounds(vfs_path, progress=None, should_stop=None, on_found=None):
+    """Every Ogg stream in the archive, with its length and quality.
+
+    'OggS' marks every PAGE, and one file is many pages -- counting those would
+    report thousands of sounds. A file begins at a page with the start-of-stream
+    flag set, so those are what is counted, and the pages after it are walked to
+    find where it ends and how long it plays.
+    """
+    size = os.path.getsize(vfs_path)
+    found = []
+    window = 8 << 20
+    overlap = 8 << 20                      # a music track can be several MB
+    with open(vfs_path, 'rb') as handle:
+        position = 0
+        while position < size:
+            handle.seek(position)
+            buffer = handle.read(window + overlap)
+            if not buffer:
+                break
+            # WAV first -- it is a cheap exact test and the two never overlap.
+            at = 0
+            while True:
+                at = buffer.find(b'RIFF', at)
+                if at < 0 or at >= window:
+                    break
+                wave = _wave_at(buffer, at)
+                if not wave:
+                    at += 4
+                    continue
+                wave['offset'] = position + at
+                found.append(wave)
+                if on_found:
+                    on_found(wave)
+                at += wave['length']
+
+            at = 0
+            while True:
+                at = buffer.find(b'OggS', at)
+                if at < 0 or at >= window:
+                    break
+                page = _page_at(buffer, at)
+                if not page or not page['first']:
+                    at += 4
+                    continue
+                ident = _identification(buffer, at, page)
+                if not ident:
+                    at += 4
+                    continue
+
+                # Walk the pages of this stream to the end, so the length of
+                # the file and its duration are both real rather than guessed.
+                cursor = at
+                last_granule = 0
+                pages = 0
+                while cursor < len(buffer):
+                    step = _page_at(buffer, cursor)
+                    if not step or step['serial'] != page['serial']:
+                        break
+                    if step['granule'] > 0:
+                        last_granule = step['granule']
+                    pages += 1
+                    cursor += step['length']
+                    if step['last']:
+                        break
+
+                sound = {'kind': 'ogg',
+                         'offset': position + at,
+                         'length': cursor - at,
+                         'pages': pages,
+                         'seconds': last_granule / float(ident['rate']),
+                         **ident}
+                found.append(sound)
+                if on_found:
+                    on_found(sound)
+                at = cursor
+            position += window
+            if progress:
+                progress(min(1.0, position / float(size)))
+            if should_stop and should_stop():
+                break
+    return found
+
+
+def read_sound(vfs_path, sound):
+    with open(vfs_path, 'rb') as handle:
+        handle.seek(sound['offset'])
+        return handle.read(sound['length'])
+
+
+def save_sound(vfs_path, sound, folder, name=None):
+    if not os.path.isdir(folder):
+        os.makedirs(folder)
+    name = name or ('sound_%d.%s' % (sound['offset'], sound.get('kind', 'ogg')))
+    path = os.path.join(folder, name)
+    with open(path, 'wb') as handle:
+        handle.write(read_sound(vfs_path, sound))
+    return path
+
+
+def play(path):
+    """Play a file through Windows, without anything installed.
+
+    WAV works properly -- winsound is standard library and plays it directly,
+    no codec and no other program. Ogg does not: Windows will not open it
+    through MCI, tested. So an Ogg is handed to whatever player the person
+    already has, and the caller is told that is what happened.
+
+    ctypes is standard library, so Windows' own media stack is reachable --
+    and Windows has understood Ogg Vorbis since Windows 10. mciSendString is
+    the old but universally present way in.
+
+    Returns (True, '') if it plays in the app, otherwise (False, reason) so the
+    caller can decide whether to hand it to whatever player the person has.
+    """
+    try:
+        import ctypes
+    except ImportError:
+        return False, 'ctypes is not available'
+    if os.name != 'nt':
+        return False, 'not Windows'
+    if path.lower().endswith('.wav'):
+        try:
+            import winsound
+            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            return True, ''
+        except Exception as trouble:                    # noqa: BLE001
+            return False, str(trouble)
+    try:
+        mci = ctypes.windll.winmm.mciSendStringW
+        buffer = ctypes.create_unicode_buffer(256)
+        mci('close rosehunt', None, 0, 0)
+        # The quotes matter -- game paths have spaces in them.
+        if mci('open "%s" alias rosehunt' % path, buffer, 254, 0) != 0:
+            return False, 'Windows would not open it'
+        if mci('play rosehunt', buffer, 254, 0) != 0:
+            mci('close rosehunt', None, 0, 0)
+            return False, 'Windows opened it but would not play it'
+        return True, ''
+    except Exception as trouble:                        # noqa: BLE001
+        return False, str(trouble)
+
+
+def stop():
+    try:
+        import winsound
+        winsound.PlaySound(None, winsound.SND_PURGE)
+    except Exception:                                   # noqa: BLE001
+        pass
+    try:
+        import ctypes
+        if os.name == 'nt':
+            ctypes.windll.winmm.mciSendStringW('close rosehunt', None, 0, 0)
+    except Exception:                                   # noqa: BLE001
+        pass
+
+
+def pretty_size(count):
+    if count >= 1024 * 1024:
+        return '%.1f MB' % (count / 1024.0 / 1024)
+    if count >= 1024:
+        return '%.0f KB' % (count / 1024.0)
+    return '%d bytes' % count
+
+
+def pretty_time(seconds):
+    if seconds >= 60:
+        return "%d:%02d" % (int(seconds) // 60, int(seconds) % 60)
+    return "%.1fs" % seconds

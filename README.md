@@ -41,8 +41,13 @@ This makes the game tell you instead.
 look. Whatever you are chasing has its own name written across it.
 
 **Backward — "where is this *used*?"** Type a filename and press Find it. Every
-place that file is drawn lights up at once.If nothing matches, the tool 
-cannot see that name — which is not quite the same as it not existing. See below.
+place that file is drawn lights up at once.
+
+**Effects and sounds too.** Browse every particle effect in the archive and
+watch its timeline play, or list every sound with its length — the music and
+the effects, which nothing else has been able to show. If nothing matches, that name does
+not exist in the archive — worth knowing before you spend an evening looking
+for it.
 
 ---
 
@@ -107,22 +112,13 @@ an atlas a pixel or two at a time, so a name written across the file never
 appears whole on screen. Marking still tells you *which* atlas changed, which is
 usually the question.
 
-**Particle files and effect wrappers cannot be marked at all.** Those records do
-not contain their own names, so there is nothing to label. Find the textures an
-effect uses and work backwards.
+**Terrain tiles cannot be marked.** The game loads a tile set as one thing and
+refuses it unless every tile agrees on size and format, and some tiles it loads
+are not named in the archive at all — so the set can never be made to agree.
+The app refuses rather than letting you try. Use Browse textures for those.
 
 **Some things are encrypted and out of reach entirely** — fonts, some model
 chains, and part of the archive index.
-
-**The name list is incomplete.** Names and pixels are stored separately in
-the archive, and this tool reads the names it can find. Some assets are
-real and in use but have no readable name entry — a search for
-`_critical_01.dds` comes back empty even though that file exists. So an
-empty result means "not found", never "not there".
-
-The same applies to effects: this reads about 211 particle records, and a
-full sweep of the archive finds 652. Marking a texture and looking at it
-in game is the reliable method; searching by name is the convenient one.
 
 ---
 
@@ -214,6 +210,7 @@ no amount of fixing would help. Worth knowing before relying on it.
 | `ROSE Asset Hunter.pyw` | the app — double-click this |
 | `rose_hunt_core.py` | scanning, markers, install, restore |
 | `rose_font.py` | a hand-built font, so nothing needs installing |
+| `rose_names.py` | reads a name table, if you have one |
 | `READ ME FIRST.txt` | the same guide, offline |
 
 All must stay together. Plain Python, standard library only — no installer, no

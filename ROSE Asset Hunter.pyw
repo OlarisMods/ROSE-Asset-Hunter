@@ -20,6 +20,7 @@ TWO WAYS ROUND
 import os
 import sys
 import threading
+import time
 
 try:
     import tkinter as tk
@@ -30,6 +31,7 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rose_hunt_core as core
+import rose_names
 
 
 # A dark theme, because the first version looked like a 1995 dialog box.
@@ -53,7 +55,68 @@ PALETTE = [
 
 # Folders where a wrong-sized texture tends to take the client down rather than
 # just look odd, so the warning can be specific instead of vague.
-RISKY = ('terrain', 'map', 'junon', 'eldeon', 'luna', 'oro', 'avatar', 'npc')
+RISKY = ('map', 'avatar', 'npc')
+
+# Terrain tiles cannot be marked at all, and this is not caution -- it is a
+# wall, with the game's own words for it:
+#
+#     All terrain textures must be the same dimensions, image
+#     'S002_01.dds' with size 128 x 128 does not match previous image
+#     'T025_01.dds' with size of 256 x 256.
+#
+#     All terrain textures must be the same compression format, image
+#     'S002_01.dds' with format RGBA8 does not match previous image
+#     'T025_01.dds' with format of BC3.
+#
+# A tile set is loaded as a SET and every member must agree on size and
+# format. Markers are 128x128 uncompressed; those tiles are 256x256 BC3.
+#
+# Marking the whole folder does not save it either. Every one of the 109 names
+# the archive gives for junon\jg was marked and the game still objected about
+# T025_01.dds -- a tile that is loaded but is not in the name list. The set
+# cannot be made uniform because the set cannot be seen.
+#
+# When the game refuses the set it ends up with nothing loaded and then reads
+# through it: access violation at address 0. Both crash dumps say exactly that.
+TERRAIN = ('terrain', 'junon', 'eldeon', 'luna', 'oro')
+
+# Models that are known to crash the client when marked, found by marking a
+# folder one file at a time. 133 meshes in 3ddata\effect\effectmesh were
+# tested; 124 were fine and these nine were not.
+#
+# Why these nine is not known yet. They fall into three families, which
+# suggests something structural rather than nine unrelated faults -- but
+# nothing in the app can see the difference without the mesh data in hand.
+#
+# Tested, not guessed. Add to it when something new is found.
+KNOWN_BAD_MESHES = (
+    '_jemitem_01.zms', '_jemitem_02.zms', '_jemitem_03.zms',
+    '_jemitem_04.zms', '_jemitem_05.zms', '_jemitem_06.zms',
+    '_pumpkin_01.zms',
+    '_warp_join_01.zms', '_warp_join_02.zms',
+)
+
+
+# A name table, if one happens to be sitting next to the app. NONE IS SHIPPED.
+# Without it everything works exactly as it always has -- offsets instead of
+# names. With it, every entry is checked against this machine's own archive
+# before it is believed, and anything that does not match is dropped.
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+NAMES = {}
+NAME_REPORT = {}
+
+
+def name_for(offset, fallback=None):
+    """What the archive calls the thing at this offset, if anything does."""
+    got = NAMES.get(offset)
+    if not got:
+        return fallback
+    return got.rsplit('\\', 1)[-1]
+
+
+def full_name_for(offset):
+    return NAMES.get(offset, '')
 
 
 class SizeDialog(object):
@@ -112,7 +175,7 @@ class ParticleViewer(object):
 
         top = self.top = tk.Toplevel(parent)
         top.title("Browse effects")
-        top.geometry("1040x720")
+        top.geometry("1280x820")
         top.configure(bg=BG)
 
         bar = ttk.Frame(top)
@@ -140,7 +203,10 @@ class ParticleViewer(object):
         ttk.Button(search, text="Find", command=self.apply_filter).pack(side='left')
         ttk.Button(search, text="Show all",
                    command=self.clear_filter).pack(side='left', padx=6)
-        ttk.Label(search, text="   e.g. star_01, or smoke, or rune",
+        ttk.Button(search, text="Open a file...",
+                   command=self.open_loose).pack(side='left', padx=(14, 0))
+        ttk.Label(search, text="   a texture like star_01, an effect like "
+                              "c_hit_01, or open one of your own",
                   style='Dim.TLabel').pack(side='left', padx=6)
 
         body = ttk.Frame(top)
@@ -285,7 +351,7 @@ class ParticleViewer(object):
         def progress(fraction):
             self.top.after(0, lambda: self.status.configure(
                 text="reading ... %d%%   (%d found)"
-                     % (int(fraction * 100), len(self.found))))
+                     % (int(fraction * 100), len(self.everything))))
         core.browse_particles(self.vfs_path, progress=progress,
                               should_stop=lambda: self.stop_flag, on_found=found)
         self.top.after(0, self.refresh)
@@ -298,25 +364,122 @@ class ParticleViewer(object):
         self.shown = list(self.found)
         self._fill()
 
+    @staticmethod
+    def _leaf(texture):
+        """Just the filename, lowercased.
+
+        Paths in the archive use DOUBLED backslashes, but not always, so both
+        separators are handled rather than relying on os.path -- which only
+        understands backslashes when it happens to be running on Windows.
+        """
+        flat = texture.replace(chr(92), '/')
+        return flat.rsplit('/', 1)[-1].strip().lower()
+
+    @staticmethod
+    def _matches(leaf, wanted):
+        """Does this texture name match what was typed?
+
+        A plain "is it in there" test was too loose in a way that was hard to
+        spot. Searching ring_03.dds returned records drawing
+        stick_firing_03.dds -- because "ring_03.dds" really is inside
+        "stick_firing_03.dds". Seven results and not one of them the thing
+        asked for.
+
+        So a match has to begin at a SEGMENT boundary: the start of the name,
+        or just after an underscore. ring_03 finds ring_03.dds and
+        _ring_03.dds, and never firing_03. A fragment like "ring" still finds
+        anything with ring as a word in it.
+        """
+        return leaf.startswith(wanted) or ('_' + wanted) in leaf
+
     def _fill(self):
+        """One row per record, named after the texture that MATCHED.
+
+        Rows used to be labelled with each record's FIRST emitter, so a search
+        returning several records that happen to open the same way gave rows
+        that all read alike -- and none of which mentioned what was searched
+        for. The matching texture is the useful label; the first one is an
+        accident of the file's own order.
+        """
         self.listing.delete(0, 'end')
+        wanted = self.wanted.get().strip().lower()
         for record in self.shown:
-            first = record['emitters'][0]['texture']
-            leaf = os.path.basename(first.replace('\\', '/'))
-            self.listing.insert('end', "%-5d %-2d  %s"
-                                % (record['offset'] % 100000,
-                                   len(record['emitters']), leaf[:28]))
+            leaves = [self._leaf(e['texture']) for e in record['emitters']]
+            shown = None
+            if wanted:
+                for leaf in leaves:
+                    if self._matches(leaf, wanted):
+                        shown = leaf
+                        break
+            if shown is None:
+                shown = leaves[0] if leaves else '?'
+            others = len(record['emitters']) - 1
+            tail = "  +%d more" % others if others > 0 else ''
+            real = name_for(record['offset'])
+            if real:
+                self.listing.insert('end', "%-26s %-2d  %s%s"
+                                    % (real[:26], len(record['emitters']),
+                                       shown[:22], tail))
+            else:
+                self.listing.insert('end', "%-5d %-2d  %s%s"
+                                    % (record['offset'] % 100000,
+                                       len(record['emitters']), shown[:26], tail))
         self.save_button.configure(state='disabled')
 
     def apply_filter(self):
         wanted = self.wanted.get().strip().lower()
         if not wanted:
             return
-        self.shown = [r for r in self.found
-                      if any(wanted in e['texture'].lower() for e in r['emitters'])]
+        # Match on the effect's own filename first when a name table is loaded.
+        # Searching for c_hit_01 should find c_hit_01, not every effect that
+        # happens to draw a texture with those letters in it.
+        by_name = [r for r in self.found
+                   if wanted in full_name_for(r['offset']).lower()]
+        self.shown = by_name or [r for r in self.found
+                      if any(self._matches(self._leaf(e['texture']), wanted)
+                             for e in r['emitters'])]
         self._fill()
         self.status.configure(
-            text="%d effect(s) draw something matching '%s'" % (len(self.shown), wanted))
+            text="%d effect(s) draw something matching '%s'"
+                 % (len(self.shown), wanted))
+    def open_loose(self):
+        """Read a .PTL from disk instead of from the archive.
+
+        This browser could only ever read rose.vfs, so you could inspect the
+        game's effects and not your own -- which is backwards, since the ones
+        you are working on are the ones you most want to check. A loose file
+        opens here now and is shown exactly the same way.
+        """
+        path = filedialog.askopenfilename(
+            title="Open a particle file",
+            filetypes=[("Particle files", "*.ptl *.PTL"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            with open(path, 'rb') as handle:
+                blob = handle.read()
+        except OSError as trouble:
+            messagebox.showerror("Cannot open it", str(trouble))
+            return
+        record = core.parse_particle(blob, 0)
+        if not record:
+            messagebox.showerror(
+                "Not a particle file",
+                "%s does not read as one.\n\nA .PTL starts with a count of "
+                "emitters followed by a quoted name -- this does not."
+                % os.path.basename(path))
+            return
+        record['offset'] = 0
+        record['name'] = os.path.basename(path)
+        self.found.insert(0, record)
+        self.shown = list(self.found)
+        self._fill()
+        self.listing.selection_clear(0, 'end')
+        self.listing.selection_set(0)
+        self.listing.see(0)
+        self.on_pick()
+        self.status.configure(text="opened %s -- %d emitter(s)"
+                              % (os.path.basename(path), len(record['emitters'])))
 
     def clear_filter(self):
         self.shown = list(self.found)
@@ -329,6 +492,9 @@ class ParticleViewer(object):
             return
         self.save_button.configure(state='normal')
         record = self.shown[picks[0]]
+        # If a name table is loaded, the record gets its real filename here so
+        # the detail pane can lead with it instead of an offset.
+        record.setdefault('name', full_name_for(record['offset']))
         self.playing = record
         self.clock = 0.0
         self.detail.configure(state='normal')
@@ -373,7 +539,7 @@ class MeshViewer(object):
 
         top = self.top = tk.Toplevel(parent)
         top.title("Browse models")
-        top.geometry("980x700")
+        top.geometry("1180x800")
         top.configure(bg=BG)
 
         bar = ttk.Frame(top)
@@ -411,7 +577,7 @@ class MeshViewer(object):
         filter_entry.bind('<Return>', lambda _e: self.apply_filter())
         ttk.Button(sorter, text="Go", width=4,
                    command=self.apply_filter).pack(side='left')
-        ttk.Label(sorter, text="tall / flat / big / small, or a number of triangles",
+        ttk.Label(sorter, text="a name, or tall / flat / big / small, or a number of triangles",
                   style='Dim.TLabel').pack(side='left', padx=6)
 
         pager = ttk.Frame(top)
@@ -435,6 +601,7 @@ class MeshViewer(object):
         self.canvas.create_window((0, 0), window=self.inner, anchor='nw')
         self.inner.bind('<Configure>', lambda _e: self.canvas.configure(
             scrollregion=self.canvas.bbox('all')))
+        self.canvas.bind('<Configure>', self._reflow)
         for widget in (self.canvas, self.inner):
             widget.bind('<MouseWheel>',
                         lambda e: self.canvas.yview_scroll(int(-e.delta / 120) * 3,
@@ -459,11 +626,29 @@ class MeshViewer(object):
         self.showing = None
         self.page = 0
         self.per_page = 56
-        self.found = []
+        self.everything = []            # every mesh found, always
+        self.found = []                 # the ones currently on show
         self.column = 0
         self.row = 0
         self.vfs_path = vfs_path
+        self._shapes = {}
         threading.Thread(target=self._load, daemon=True).start()
+
+    def geometry(self, mesh):
+        """The vertices and triangles for one mesh, read when actually needed.
+
+        Only a summary is held for the thousands that are not on screen, so
+        this fetches the shape for the handful that are. A small cache keeps
+        the current page instant without holding the whole archive.
+        """
+        offset = mesh['offset']
+        got = self._shapes.get(offset)
+        if got is None:
+            got = core.read_mesh_at(self.vfs_path, offset) or {'points': [], 'faces': []}
+            if len(self._shapes) > 60:
+                self._shapes.clear()
+            self._shapes[offset] = got
+        return got
 
     def show_page(self):
         for child in self.inner.winfo_children():
@@ -492,10 +677,12 @@ class MeshViewer(object):
             self.show_page()
 
     def apply_filter(self):
-        """Narrow to a kind of shape, or a size of model.
+        """Narrow by name, by shape, or by size.
 
-        There are no names to search here, so the useful questions are about
-        shape -- and shape is what tells a beam from a ring in the first place.
+        Name comes first when a name table is loaded -- nobody scrolls eight
+        thousand wireframes looking for something they can already name. With
+        no table the questions are about shape, which is what tells a beam from
+        a ring in the first place.
         """
         text = self.filter_text.get().strip().lower()
         if not text:
@@ -503,16 +690,18 @@ class MeshViewer(object):
         else:
             keep = []
             for mesh in self.everything:
-                points = mesh['points']
-                if not points:
-                    continue
-                spans = [max(p[i] for p in points) - min(p[i] for p in points)
-                         for i in range(3)]
+                spans = [mesh['max'][i] - mesh['min'][i] for i in range(3)]
                 flat = max(spans[0], spans[1]) or 1e-6
                 ratio = spans[2] / flat
-                faces = len(mesh['faces'])
+                faces = mesh['nfaces']
                 match = False
-                if text.isdigit():
+                # Search by NAME first, if a name table is loaded. That is what
+                # anyone actually wants -- nobody scrolls 8000 wireframes
+                # looking for one thing when they know what it is called.
+                real = full_name_for(mesh['offset']).lower()
+                if real and text in real:
+                    match = True
+                elif text.isdigit():
                     match = faces >= int(text)
                 elif text.startswith('tall'):
                     match = ratio > 1.6
@@ -531,14 +720,10 @@ class MeshViewer(object):
     def resort(self):
         key = self.sort_by.get()
         if key == 'detail':
-            self.found.sort(key=lambda m: -len(m['faces']))
+            self.found.sort(key=lambda m: -m['nfaces'])
         elif key == 'shape':
             def ratio(mesh):
-                points = mesh['points']
-                if not points:
-                    return 0
-                spans = [max(p[i] for p in points) - min(p[i] for p in points)
-                         for i in range(3)]
+                spans = [mesh['max'][i] - mesh['min'][i] for i in range(3)]
                 flat = max(spans[0], spans[1]) or 1e-6
                 return -(spans[2] / flat)
             self.found.sort(key=ratio)
@@ -571,24 +756,39 @@ class MeshViewer(object):
 
     def _load(self):
         def found(mesh):
-            self.found.append(mesh)
-            if len(self.found) <= self.per_page:
+            # EVERYTHING is the master list and is always appended to.
+            # FOUND is only what is currently on show.
+            #
+            # These used to be the same list until the scan finished, so
+            # filtering mid-scan replaced the list the scan was still writing
+            # into -- and clearing the filter afterwards restored an empty one,
+            # because `everything` had not been filled yet. The models were all
+            # still there; nothing could see them.
+            self.everything.append(mesh)
+            if not self.filter_text.get().strip():
+                self.found = self.everything
+            if len(self.everything) <= self.per_page:
                 self.top.after(0, self._add, mesh)
-            elif len(self.found) % 150 == 0:
+            elif len(self.everything) % 150 == 0:
                 self.top.after(0, self.show_page)
 
         def progress(fraction):
             self.top.after(0, lambda: self.status.configure(
                 text="reading ... %d%%   (%d found)"
-                     % (int(fraction * 100), len(self.found))))
+                     % (int(fraction * 100), len(self.everything))))
         core.browse_meshes(self.vfs_path, progress=progress,
                            should_stop=lambda: self.stop_flag, on_found=found)
-        self.everything = list(self.found)
+        if not self.filter_text.get().strip():
+            self.found = self.everything
         self.top.after(0, self.show_page)
         self.top.after(0, lambda: self.warning.configure(text=""))
         self.top.after(0, lambda: self.status.configure(
-            text="%d model(s) found -- everything is smooth now."
-                 % len(self.found)))
+            text="%d model(s) found -- everything is smooth now.%s"
+                 % (len(self.everything),
+                    ("   (%s could not be read)" %
+                     ', '.join("%d x %s" % (n, v)
+                               for v, n in sorted(core.SKIPPED_VERSIONS.items())))
+                    if core.SKIPPED_VERSIONS else "")))
 
     def _draw(self, canvas, mesh):
         """A wireframe, seen from a corner.
@@ -597,7 +797,8 @@ class MeshViewer(object):
         to recognise a shape, and a plain wireframe does that while staying
         fast enough to draw hundreds of them.
         """
-        points = mesh['points']
+        shape = self.geometry(mesh)
+        points = shape['points']
         if not points:
             return
         # look down onto the model from an angle, so depth reads
@@ -615,7 +816,7 @@ class MeshViewer(object):
         flat = [(p[0] * scale + offset_x, p[1] * scale + offset_y) for p in projected]
 
         edges = set()
-        for a, b, c in mesh['faces'][:1200]:
+        for a, b, c in shape['faces'][:1200]:
             if max(a, b, c) >= len(flat):
                 continue
             for start, end in ((a, b), (b, c), (c, a)):
@@ -624,6 +825,33 @@ class MeshViewer(object):
             canvas.create_line(flat[start][0], flat[start][1],
                                flat[end][0], flat[end][1], fill="#8fd8a6")
 
+    # Tiles used to wrap at a fixed number of columns -- seven here, eight in
+    # the texture browser. The grid area is only about a third of the window,
+    # so three fitted and the rest were drawn past the edge with no horizontal
+    # scrollbar to reach them. Every screenshot had a sliced column in it.
+    #
+    # So the count comes from the actual width instead, and the tiles re-flow
+    # when the window is resized.
+    def _columns(self):
+        try:
+            width = self.canvas.winfo_width()
+        except Exception:                                   # noqa: BLE001
+            width = 0
+        if width <= 1:                                      # not drawn yet
+            return 3
+        return max(1, int(width - 4) // (self.SIZE + 22))
+
+    def _reflow(self, _event=None):
+        """Re-place every tile for the width we now have."""
+        columns = self._columns()
+        if columns == getattr(self, '_last_columns', None):
+            return
+        self._last_columns = columns
+        for index, cell in enumerate(self.cells):
+            cell.grid(row=index // columns, column=index % columns, padx=6, pady=6)
+        self.row = len(self.cells) // columns
+        self.column = len(self.cells) % columns
+
     def _add(self, mesh):
         cell = tk.Frame(self.inner, bg=PANEL, padx=4, pady=4,
                         highlightthickness=2, highlightbackground=PANEL)
@@ -631,8 +859,8 @@ class MeshViewer(object):
                             bg="#101014", highlightthickness=0)
         picture.pack()
         self._draw(picture, mesh)
-        tk.Label(cell, text="%d pts  %d tris" % (len(mesh['points']),
-                                                 len(mesh['faces'])),
+        tk.Label(cell, text="%d pts  %d tris" % (mesh['npoints'],
+                                                 mesh['nfaces']),
                  bg=PANEL, fg=DIM, font=('Consolas', 8)).pack()
         cell.grid(row=self.row, column=self.column, padx=6, pady=6)
         self.meshes.append(mesh)
@@ -642,7 +870,7 @@ class MeshViewer(object):
             widget.bind('<Button-1>', lambda _e, i=index: self.pick(i, False))
             widget.bind('<Control-Button-1>', lambda _e, i=index: self.pick(i, True))
         self.column += 1
-        if self.column >= 7:
+        if self.column >= self._columns():
             self.column = 0
             self.row += 1
 
@@ -665,11 +893,12 @@ class MeshViewer(object):
         self.save_button.configure(state='normal' if self.chosen else 'disabled')
 
     def _fill_info(self, mesh):
-        points = mesh['points']
+        shape = self.geometry(mesh)
+        points = shape['points']
         spans = [max(p[i] for p in points) - min(p[i] for p in points)
                  for i in range(3)] if points else [0, 0, 0]
         lines = ["%d points" % len(points),
-                 "%d triangles" % len(mesh['faces']),
+                 "%d triangles" % mesh['nfaces'],
                  "",
                  "size   x %.2f" % spans[0],
                  "       y %.2f" % spans[1],
@@ -683,6 +912,9 @@ class MeshViewer(object):
             lines.append("shape  flat -- a ring, plate or ground mark")
         else:
             lines.append("shape  roughly even")
+        real = full_name_for(mesh['offset'])
+        if real:
+            lines += ["", real]
         lines += ["", "found at %d" % mesh['offset'],
                   "         (0x%X)" % mesh['offset']]
         self.info.configure(state='normal')
@@ -690,14 +922,15 @@ class MeshViewer(object):
         self.info.insert('end', "\n".join(lines))
         self.info.configure(state='disabled')
         self.status.configure(text="%d points, %d triangles, at %d"
-                              % (len(points), len(mesh['faces']), mesh['offset']))
+                              % (mesh['npoints'], mesh['nfaces'], mesh['offset']))
 
     def _draw_big(self):
         """The selected model, large, at whatever angle it has been turned to."""
         import math
         self.big.delete('all')
         mesh = self.showing
-        if not mesh or not mesh['points']:
+        shape = self.geometry(mesh) if mesh else None
+        if not shape or not shape['points']:
             return
         size_w = max(140, self.big.winfo_width())
         size_h = max(140, self.big.winfo_height())
@@ -705,7 +938,7 @@ class MeshViewer(object):
         cos_t, sin_t = math.cos(self.turn), math.sin(self.turn)
         cos_p, sin_p = math.cos(self.tilt), math.sin(self.tilt)
         flat = []
-        for x, y, z in mesh['points']:
+        for x, y, z in shape['points']:
             rx = x * cos_t - y * sin_t
             ry = x * sin_t + y * cos_t
             sx = rx
@@ -719,7 +952,7 @@ class MeshViewer(object):
         oy = size_h / 2 - (min(ys) + max(ys)) / 2 * scale
         screen = [(p[0] * scale + ox, p[1] * scale + oy) for p in flat]
         edges = set()
-        for a, b, c in mesh['faces'][:4000]:
+        for a, b, c in shape['faces'][:4000]:
             if max(a, b, c) >= len(screen):
                 continue
             for start, end in ((a, b), (b, c), (c, a)):
@@ -737,7 +970,14 @@ class MeshViewer(object):
             filetypes=[("Zip archive", "*.zip")])
         if not out:
             return
-        core.save_meshes_as_zip([self.meshes[i] for i in sorted(self.chosen)], out)
+        try:
+            core.save_meshes_as_zip([self.meshes[i] for i in sorted(self.chosen)],
+                                    out, vfs_path=self.vfs_path, names=NAMES)
+        except Exception as trouble:                        # noqa: BLE001
+            messagebox.showerror("Could not save",
+                                 "Nothing was written:\n\n%s" % trouble)
+            self.status.configure(text="save failed -- nothing written")
+            return
         self.status.configure(text="saved %d model(s) into %s"
                               % (len(self.chosen), os.path.basename(out)))
 
@@ -763,7 +1003,7 @@ class TextureViewer(object):
 
         top = self.top = tk.Toplevel(parent)
         top.title("Browse textures")
-        top.geometry("980x700")
+        top.geometry("1180x800")
         top.configure(bg=BG)
 
         bar = ttk.Frame(top)
@@ -806,6 +1046,20 @@ class TextureViewer(object):
         ttk.Label(sorter, text="a hex code like e8a521, or a word like amber",
                   style='Dim.TLabel').pack(side='left', padx=6)
 
+        namer = ttk.Frame(top)
+        namer.pack(fill='x', padx=12, pady=(6, 0))
+        ttk.Label(namer, text="Show only:", style='Dim.TLabel').pack(side='left')
+        self.name_wanted = tk.StringVar()
+        name_entry = ttk.Entry(namer, textvariable=self.name_wanted, width=28)
+        name_entry.pack(side='left', padx=6)
+        name_entry.bind('<Return>', lambda _e: self.filter_by_name())
+        ttk.Button(namer, text="Find", width=6,
+                   command=self.filter_by_name).pack(side='left')
+        ttk.Button(namer, text="Show all", width=9,
+                   command=self.clear_name).pack(side='left', padx=6)
+        self.name_note = ttk.Label(namer, text="", style='Dim.TLabel')
+        self.name_note.pack(side='left', padx=8)
+
         pager = ttk.Frame(top)
         pager.pack(fill='x', padx=12, pady=(6, 0))
         ttk.Button(pager, text="< back", command=self.page_back).pack(side='left')
@@ -829,6 +1083,7 @@ class TextureViewer(object):
         self.canvas.create_window((0, 0), window=self.inner, anchor='nw')
         self.inner.bind('<Configure>', lambda _e: self.canvas.configure(
             scrollregion=self.canvas.bbox('all')))
+        self.canvas.bind('<Configure>', self._reflow)
         for widget in (self.canvas, self.inner):
             widget.bind('<MouseWheel>', self._wheel)
             widget.bind('<Button-4>', lambda _e: self.canvas.yview_scroll(-3, 'units'))
@@ -850,7 +1105,8 @@ class TextureViewer(object):
 
         self.page = 0
         self.per_page = 60
-        self.found = []                 # everything, in order
+        self.everything = []            # every texture found, always
+        self.found = []                 # the ones currently on show
         self.column = 0
         self.row = 0
         self.vfs_path = vfs_path
@@ -887,6 +1143,28 @@ class TextureViewer(object):
         if self.page > 0:
             self.page -= 1
             self.show_page()
+
+    def filter_by_name(self):
+        """Narrow to textures whose name contains this. Needs a name table."""
+        wanted = self.name_wanted.get().strip().lower()
+        if not wanted:
+            return self.clear_name()
+        if not NAMES:
+            self.name_note.configure(
+                text="no name table loaded -- searching by name needs one")
+            return
+        self.found = [i for i in self.everything
+                      if wanted in full_name_for(i['offset']).lower()]
+        self.page = 0
+        self.name_note.configure(text="%d match '%s'" % (len(self.found), wanted))
+        self.show_page()
+
+    def clear_name(self):
+        self.name_wanted.set('')
+        self.found = list(self.everything)
+        self.page = 0
+        self.name_note.configure(text="")
+        self.show_page()
 
     def sort_near_colour(self):
         """Order by how close each texture is to a colour you name.
@@ -954,7 +1232,11 @@ class TextureViewer(object):
         low, high = size_range
 
         def found(item):
-            self.found.append(item)
+            # Master list and view kept apart, so filtering by name mid-scan
+            # cannot replace the list the scan is still writing into.
+            self.everything.append(item)
+            if not self.name_wanted.get().strip():
+                self.found = self.everything
             if len(self.found) <= self.per_page:
                 self.top.after(0, self._add, item)
             elif len(self.found) % 200 == 0:
@@ -963,7 +1245,7 @@ class TextureViewer(object):
         def progress(fraction):
             self.top.after(0, lambda: self.status.configure(
                 text="reading ... %d%%   (%d found)"
-                     % (int(fraction * 100), len(self.found))))
+                     % (int(fraction * 100), len(self.everything))))
         try:
             core.browse_textures(vfs_path, min_side=low, max_side=high,
                                  progress=progress,
@@ -977,6 +1259,29 @@ class TextureViewer(object):
         self.top.after(0, lambda: self.status.configure(
             text="%d texture(s) found -- everything is smooth now."
                  % len(self.found)))
+
+
+    # Same story as the mesh browser: the wrap used to be a fixed eight
+    # columns, which was more than the grid area could show, so the last one
+    # was always sliced by the scrollbar.
+    def _columns(self):
+        try:
+            width = self.canvas.winfo_width()
+        except Exception:                                   # noqa: BLE001
+            width = 0
+        if width <= 1:
+            return 3
+        return max(1, int(width - 4) // (self.THUMB + 26))
+
+    def _reflow(self, _event=None):
+        columns = self._columns()
+        if columns == getattr(self, '_last_columns', None):
+            return
+        self._last_columns = columns
+        for index, cell in enumerate(self.cells):
+            cell.grid(row=index // columns, column=index % columns, padx=6, pady=6)
+        self.row = len(self.cells) // columns
+        self.column = len(self.cells) % columns
 
     def _add(self, item):
         """Put one thumbnail into the grid, making it now if need be."""
@@ -1009,7 +1314,7 @@ class TextureViewer(object):
             widget.bind('<Button-1>', lambda _e, i=index: self.pick(i, False))
             widget.bind('<Control-Button-1>', lambda _e, i=index: self.pick(i, True))
         self.column += 1
-        if self.column >= 8:
+        if self.column >= self._columns():
             self.column = 0
             self.row += 1
 
@@ -1055,7 +1360,8 @@ class TextureViewer(object):
             return
 
         blob = core.read_at(self.vfs_path, item['offset'], item['length'])
-        lines = [
+        real = full_name_for(item['offset'])
+        lines = ([real, ""] if real else []) + [
             "%d x %d" % (item['width'], item['height']),
             "format      %s" % item['format'],
             "file size   %s" % _pretty_size(item['length']),
@@ -1096,6 +1402,202 @@ class TextureViewer(object):
         core.save_many_as_zip(picked, path, self.vfs_path)
         self.status.configure(text="saved %d file(s) into %s"
                               % (len(picked), os.path.basename(path)))
+
+
+class SoundViewer(object):
+    """Browse the archive's audio.
+
+    Nothing is decoded. An Ogg file states its own channels, sample rate and
+    bitrate in plain fields before the compressed audio begins, and the last
+    page carries a sample count -- so every sound can be listed with its
+    length and quality without reading a single sample.
+
+    Playing is handed to Windows, which has understood Ogg since Windows 10.
+    If it will not, the file is written out and opened with whatever player
+    the person already has, which is honest rather than silent.
+    """
+
+    def __init__(self, parent, vfs_path):
+        self.vfs = vfs_path
+        self.sounds = []
+        self.shown = []
+        self.stop_flag = False
+        self.temp = None
+
+        top = tk.Toplevel(parent)
+        self.top = top
+        top.title("Browse sounds")
+        top.geometry("1000x720")
+        top.configure(bg=BG)
+        top.protocol('WM_DELETE_WINDOW', self.close)
+
+        bar = ttk.Frame(top)
+        bar.pack(side='bottom', fill='x', padx=12, pady=10)
+        self.status = ttk.Label(bar, text="reading ...", style='Dim.TLabel')
+        self.status.pack(side='left')
+        ttk.Button(bar, text="Close", command=self.close).pack(side='right')
+        ttk.Button(bar, text="Save selected", style='Go.TButton',
+                   command=self.save).pack(side='right', padx=8)
+        ttk.Button(bar, text="Stop reading",
+                   command=self.stop).pack(side='right')
+
+        head = ttk.Frame(top)
+        head.pack(fill='x', padx=12, pady=(12, 0))
+        ttk.Label(head, text="Sort by:  ", style='Dim.TLabel').pack(side='left')
+        self.order = tk.StringVar(value='found')
+        for label, value in (("where it was found", 'found'),
+                             ("kind", 'kind'),
+                             ("length", 'length'),
+                             ("quality", 'quality')):
+            ttk.Radiobutton(head, text=label, value=value, variable=self.order,
+                            command=self.resort).pack(side='left', padx=(0, 12))
+        ttk.Label(head, text="   WAV are sound effects and play in here. "
+                             "OGG are music and open in your own player.",
+                  style='Dim.TLabel').pack(side='left')
+
+        ttk.Label(top, text="   where            kind  length    size       "
+                            "channels  rate      bitrate",
+                  style='Dim.TLabel').pack(fill='x', padx=12, pady=(10, 0))
+
+        body = ttk.Frame(top)
+        body.pack(fill='both', expand=True, padx=12, pady=(2, 10))
+        scroll = ttk.Scrollbar(body)
+        scroll.pack(side='right', fill='y')
+        self.listing = tk.Listbox(body, bg=PANEL, fg=INK, relief='flat',
+                                  font=('Consolas', 10), selectmode='extended',
+                                  selectbackground=ACCENT, selectforeground=BG,
+                                  yscrollcommand=scroll.set, activestyle='none')
+        self.listing.pack(side='left', fill='both', expand=True)
+        scroll.config(command=self.listing.yview)
+        self.listing.bind('<<ListboxSelect>>', self.on_pick)
+        self.listing.bind('<Double-Button-1>', lambda _e: self.play())
+
+        note = ttk.Frame(top)
+        note.pack(fill='x', padx=12)
+        ttk.Button(note, text="Play / open", style='Go.TButton',
+                   command=self.play).pack(side='left')
+        ttk.Button(note, text="Stop", command=self.hush).pack(side='left', padx=6)
+        self.detail = ttk.Label(note, text="", style='Dim.TLabel')
+        self.detail.pack(side='left', padx=12)
+
+        self.start()
+
+    # ------------------------------------------------------------ reading
+
+    def start(self):
+        def work():
+            def found(sound):
+                self.sounds.append(sound)
+                if len(self.sounds) % 10 == 0:
+                    self.top.after(0, self.refresh)
+            core.browse_sounds(self.vfs, on_found=found,
+                               should_stop=lambda: self.stop_flag)
+            self.top.after(0, self.refresh)
+            self.top.after(0, lambda: self.status.configure(
+                text="%d sound(s) found" % len(self.sounds)))
+        threading.Thread(target=work, daemon=True).start()
+
+    def stop(self):
+        self.stop_flag = True
+
+    def refresh(self):
+        self.resort()
+        if not self.stop_flag:
+            self.status.configure(text="reading ... (%d found)" % len(self.sounds))
+
+    def resort(self):
+        how = self.order.get()
+        if how == 'kind':
+            self.shown = sorted(self.sounds,
+                                key=lambda s: (s.get('kind', 'ogg'), s['seconds']))
+        elif how == 'length':
+            self.shown = sorted(self.sounds, key=lambda s: -s['seconds'])
+        elif how == 'quality':
+            self.shown = sorted(self.sounds, key=lambda s: (-s['rate'], -s['bitrate']))
+        else:
+            self.shown = list(self.sounds)
+        self.listing.delete(0, 'end')
+        for sound in self.shown:
+            # The offset is shown because you can sort by it -- a sort with no
+            # visible key is just an order you have to take on trust. It is
+            # also the only handle any of these has: sounds have no names.
+            self.listing.insert('end',
+                                "%-11s %-4s %-8s  %-9s %dch %6dHz  %5d kbps  %s"
+                                % (name_for(sound['offset'], str(sound['offset'])),
+                                   sound.get('kind', 'ogg').upper(),
+                                   core.pretty_time(sound['seconds']),
+                                   core.pretty_size(sound['length']),
+                                   sound['channels'], sound['rate'],
+                                   max(0, sound['bitrate']) // 1000,
+                                   'music' if sound['seconds'] > 20 else ''))
+
+    # ------------------------------------------------------------ using one
+
+    def picked(self):
+        marks = self.listing.curselection()
+        return [self.shown[i] for i in marks if i < len(self.shown)]
+
+    def on_pick(self, _event=None):
+        chosen = self.picked()
+        if not chosen:
+            return
+        sound = chosen[0]
+        self.detail.configure(
+            text="%s   %d channel(s)   %d Hz   %d kbps   %d page(s)   at %d"
+                 % (core.pretty_time(sound['seconds']), sound['channels'],
+                    sound['rate'], max(0, sound['bitrate']) // 1000,
+                    sound['pages'], sound['offset']))
+
+    def play(self):
+        chosen = self.picked()
+        if not chosen:
+            return
+        sound = chosen[0]
+        folder = os.path.join(os.path.expanduser('~'), 'ROSE_Hunt_Play')
+        self.temp = core.save_sound(self.vfs, sound, folder,
+                                    'preview_%d.%s' % (sound['offset'],
+                                                       sound.get('kind', 'ogg')))
+        worked, why = core.play(self.temp)
+        if worked:
+            self.status.configure(text="playing %s" % os.path.basename(self.temp))
+            return
+        # Honest fallback: Windows would not play it in here, so hand it over.
+        # Ogg is expected to land here: Windows will not open it through MCI.
+        # A WAV reaching this point IS a surprise and worth the detail.
+        if sound.get('kind') == 'ogg':
+            self.status.configure(text="music opens in your own player "
+                                       "(Windows will not play Ogg in here)")
+        else:
+            self.status.configure(text="could not play it here (%s) -- "
+                                       "opening it in your own player" % why)
+        try:
+            os.startfile(self.temp)                      # noqa: S606
+        except Exception as trouble:                     # noqa: BLE001
+            messagebox.showerror("Cannot play it",
+                                 "Saved it to:\n\n%s\n\nbut could not open "
+                                 "it: %s" % (self.temp, trouble))
+
+    def hush(self):
+        core.stop()
+        self.status.configure(text="stopped")
+
+    def save(self):
+        chosen = self.picked()
+        if not chosen:
+            messagebox.showinfo("Nothing picked", "Choose one or more first.")
+            return
+        folder = filedialog.askdirectory(title="Where should they go?")
+        if not folder:
+            return
+        out = os.path.join(folder, 'ROSE_Sounds_' + time.strftime('%Y%m%d_%H%M'))
+        for sound in chosen:
+            core.save_sound(self.vfs, sound, out)
+        self.status.configure(text="saved %d to %s" % (len(chosen), out))
+
+    def close(self):
+        self.stop_flag = True
+        core.stop()
+        self.top.destroy()
 
 
 class HunterWindow(object):
@@ -1187,6 +1689,8 @@ class HunterWindow(object):
                    command=self.open_mesh_viewer).pack(side='left', padx=(0, 6))
         ttk.Button(look, text="Effects", width=11,
                    command=self.open_particle_viewer).pack(side='left', padx=(0, 6))
+        ttk.Button(look, text="Sounds", width=11,
+                   command=self.open_sound_viewer).pack(side='left', padx=(0, 6))
         ttk.Label(look, text="   Pull out:  ", style='Dim.TLabel').pack(side='left')
         ttk.Button(look, text="All textures", width=13,
                    command=self.start_extract).pack(side='left', padx=(0, 6))
@@ -1255,7 +1759,8 @@ class HunterWindow(object):
         self.kind_filter = tk.StringVar(value='all')
         for label, value in (("everything", 'all'),
                              ("textures only", 'dds'),
-                             ("models only", 'zms')):
+                             ("models only", 'zms'),
+                             ("effects only", 'ptl')):
             ttk.Radiobutton(filter_row, text=label, variable=self.kind_filter,
                             value=value,
                             command=self.refresh_files).pack(side='left', padx=(0, 10))
@@ -1403,11 +1908,32 @@ class HunterWindow(object):
             def progress(fraction):
                 self.bar['value'] = fraction * 100
                 self.set_status("reading the archive ... %d%%" % int(fraction * 100))
-            found = core.scan_everything(os.path.join(where, 'rose.vfs'),
-                                         progress, self.should_stop)
+
+            # A name table, only if one happens to be sitting next to the app.
+            # NONE IS SHIPPED. Every entry is checked against THIS archive
+            # before it is believed -- a name that points at something else is
+            # dropped, because a wrong name is worse than no name.
+            vfs = os.path.join(where, 'rose.vfs')
+            table = rose_names.find_table(HERE)
+            if table:
+                self.say("")
+                self.say("Found a name table next to the app. Checking it "
+                         "against your archive ...", ACCENT)
+                globals()['NAMES'], globals()['NAME_REPORT'] = rose_names.load(
+                    table, vfs, should_stop=self.should_stop)
+                self.say(rose_names.describe(NAME_REPORT),
+                         GOOD if NAMES else WARN)
+
+            found = core.scan_everything(vfs, progress, self.should_stop)
+            # Effect filenames are in the archive as plain strings, same as
+            # texture and model names -- they just cannot be tied to the data.
+            # For marking that does not matter: a marker is written to a PATH,
+            # and the path is all we need.
+            found['ptl'] = core.scan_archive(vfs, 'ptl', None, None,
+                                             self.should_stop)
             self.all_names = found
             groups = {}
-            for extension in ('dds', 'zms'):
+            for extension in ('dds', 'zms', 'ptl'):
                 for folder, names in core.group_by_folder(found[extension]).items():
                     groups.setdefault((extension, folder), []).extend(names)
             self.folders = groups
@@ -1415,13 +1941,15 @@ class HunterWindow(object):
             self.folder_keys = []
             for key in sorted(groups, key=lambda k: (k[0], k[1])):
                 extension, folder = key
-                kind = 'textures' if extension == 'dds' else 'MODELS'
+                kind = {'dds': 'textures', 'zms': 'MODELS',
+                        'ptl': 'EFFECTS'}.get(extension, extension)
                 self.folder_list.insert(
                     'end', "%-50s %5d  %s" % (folder[:50], len(groups[key]), kind))
                 self.folder_keys.append(key)
             self.say("")
-            self.say("%d textures and %d models, in %d folders."
-                     % (len(found['dds']), len(found['zms']), len(groups)), GOOD)
+            self.say("%d textures, %d models and %d effects, in %d folders."
+                     % (len(found['dds']), len(found['zms']),
+                        len(found.get('ptl', [])), len(groups)), GOOD)
             self.say("Pick one or more folders on the left. Ctrl-click for several.")
         self.run_in_background(work)
 
@@ -1532,6 +2060,53 @@ class HunterWindow(object):
         self.install_button.configure(state='normal')
         self.set_status("%d file(s) selected" % len(hits))
 
+    def install_effect_markers(self, where, names):
+        """Put a numbered marker at each chosen effect and see which one fires.
+
+        This is the trick that found c_hit_01 -- the effect that draws every
+        ranged critical and has nothing in its name to say so. Searching by
+        name had failed for two days; sixteen numbered markers answered it in
+        one fight.
+
+        A name table cannot do this. A table says what an effect is CALLED. It
+        cannot say which one FIRES when you do something, and those come apart
+        badly in this game.
+        """
+        if len(names) > 40:
+            if not messagebox.askokcancel(
+                    "That is a lot of effects",
+                    "%d effects selected.\n\nEvery one gets its own number, and "
+                    "reading a number off the screen only works if you can tell "
+                    "them apart. Sixteen or so is comfortable.\n\nCarry on "
+                    "anyway?" % len(names)):
+                return
+        if not messagebox.askokcancel(
+                "Mark %d effect(s)?" % len(names),
+                "Each one will be replaced by a marker drawing its own number.\n\n"
+                "Go and do the thing you are chasing, then read the number. The "
+                "key is written to ROSE_HUNT_KEY.txt next to the game.\n\n"
+                "Press Restore everything when you are done."):
+            return
+
+        def work():
+            self.say("")
+            self.say("Writing %d effect marker(s) ..." % len(names), ACCENT)
+            record, key = core.install_effect_markers(
+                where, names,
+                on_step=lambda done, total: self.set_status(
+                    "writing markers ... %d of %d" % (done, total)))
+            core.write_key_file(where, key)
+            bad = [f for f in record['files'] if 'error' in f]
+            self.say("Wrote %d file(s)." % (len(record['files']) - len(bad)), GOOD)
+            for f in bad:
+                self.say("  could not write %s -- %s" % (f['path'], f['error']), WARN)
+            self.say("")
+            self.say("Start the game and do the thing you are chasing. Whichever "
+                     "number appears is the effect that fired.", ACCENT)
+            self.say("The numbers are listed in ROSE_HUNT_KEY.txt next to the game.")
+            self.say("Press Restore everything when you are done.")
+        self.run_in_background(work)
+
     def start_install(self):
         where = self.check_folder()
         if not where or not self.selected_names:
@@ -1539,12 +2114,76 @@ class HunterWindow(object):
         names = self.selected_names
         style = self.style_var.get()
 
+        # Effects are marked a different way -- a numbered particle record
+        # rather than a texture -- so they are handled on their own and cannot
+        # be mixed with textures in one go.
+        if 'ptl' in self.selected_kinds:
+            if len(self.selected_kinds) > 1:
+                messagebox.showinfo(
+                    "One kind at a time",
+                    "Effects are marked differently from textures and models, "
+                    "so pick effects on their own.")
+                return
+            return self.install_effect_markers(where, names)
+
         if 'zms' in self.selected_kinds and not self.mesh_ok.get():
             messagebox.showwarning(
                 "Models are switched off",
                 "Your selection includes models, and marking those can crash "
                 "the game.\n\nIf you want to anyway, tick the box under the "
                 "marking options first.")
+            return
+
+        # Names with no folder cannot be marked usefully. The archive stores
+        # some paths as a bare filename, and there are 32,550 of them -- with
+        # nothing to say where they belong, a marker can only be written to the
+        # root of the game folder, where the client will never look for it.
+        #
+        # It used to write them anyway: thousands of files scattered into the
+        # ROSE folder, achieving nothing and needing cleaning up afterwards.
+        pathless = [n for n in names if '\\' not in n and '/' not in n]
+        if pathless:
+            messagebox.showerror(
+                "These have no folder",
+                "%d of these are stored in the archive as a bare filename with "
+                "no folder.\n\nA marker has to be written to the path the game "
+                "asks for, and there is no path here -- so it would land in the "
+                "root of your ROSE folder, where nothing will ever read it. "
+                "Thousands of files, no markers.\n\nUse Browse textures for "
+                "these instead. Nothing is installed, so the missing path does "
+                "not matter." % len(pathless))
+            return
+
+        bad = [n for n in names
+               if os.path.basename(n.replace('\\', '/')).lower() in KNOWN_BAD_MESHES]
+        if bad:
+            if not messagebox.askokcancel(
+                    "Some of these are known to crash",
+                    "%d of these models have crashed the game every time they "
+                    "were marked:\n\n    %s\n\nThe other 124 in that folder "
+                    "were fine, so this is not models in general -- it is "
+                    "these.\n\nSkip them and mark the rest?"
+                    % (len(bad), '\n    '.join(
+                        os.path.basename(n.replace('\\', '/')) for n in bad[:12]))):
+                return
+            names = [n for n in names if n not in bad]
+            if not names:
+                return
+
+        terrain = [n for n in names if any(word in n.lower() for word in TERRAIN)]
+        if terrain:
+            messagebox.showerror(
+                "Terrain tiles cannot be marked",
+                "%d of these are terrain tiles, and marking those does not "
+                "work -- it is not a risk, it fails every time.\n\n"
+                "The game loads a tile set as one thing and refuses it unless "
+                "every tile agrees on size and format. Markers are 128x128 "
+                "uncompressed; the tiles are 256x256 BC3.\n\n"
+                "Marking the whole folder does not help. Some tiles the game "
+                "loads are not in the archive's name list at all, so the set "
+                "can never be made to agree.\n\n"
+                "Use Browse textures to look at these instead -- nothing is "
+                "installed, so nothing can refuse it." % len(terrain))
             return
 
         risky = [n for n in names if any(word in n.lower() for word in RISKY)]
@@ -1752,6 +2391,13 @@ class HunterWindow(object):
         if not where:
             return
         ParticleViewer(self.root, os.path.join(where, 'rose.vfs'))
+
+    def open_sound_viewer(self):
+        """Every sound in the archive, with its length -- and playable."""
+        where = self.check_folder()
+        if not where:
+            return
+        SoundViewer(self.root, os.path.join(where, 'rose.vfs'))
 
     def show_installed(self):
         where = self.check_folder()
